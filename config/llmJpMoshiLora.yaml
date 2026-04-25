@@ -1,0 +1,50 @@
+# data
+data:
+  train_data: "datasets/train.jsonl"
+  eval_data: ""
+  shuffle: true
+
+# model
+moshi_paths:
+  hf_repo_id: "llm-jp/llm-jp-moshi-v1"
+
+full_finetuning: false
+lora:
+  enable: true
+  rank: 128
+  scaling: 2.
+  ft_embed: false
+
+first_codebook_weight_multiplier: 100.
+text_padding_weight: .5
+
+# optim
+duration_sec: 60
+batch_size: 1
+max_steps: 1500
+num_microbatches: 1
+gradient_checkpointing: true
+optim:
+  lr: 2e-6
+  weight_decay: 0.1
+  pct_start: 0.05
+
+# other
+seed: 0
+log_freq: 10
+eval_freq: 100
+do_eval: false
+do_ckpt: true
+ckpt_freq: 100
+num_ckpt_keep: 5
+
+save_adapters: true
+param_dtype: "float16"
+run_dir: "loras/llmJpMoshiV1"
+overwrite_run_dir: false
+
+# wandb:
+#   project: "moshi-lora"
+#   run_name: "llmJpMoshiV1"
+#   key: ""
+#   offline: false
