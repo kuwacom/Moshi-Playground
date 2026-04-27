@@ -1,5 +1,5 @@
 models/*
-datasets/*
+datasets/**
 loras/*
 __pycache__/
 *.pyc

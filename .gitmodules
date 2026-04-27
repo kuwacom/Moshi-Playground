@@ -1,0 +1,3 @@
+[submodule "moshi-finetune"]
+	path = moshi-finetune
+	url = git@github.com:kuwacom/Moshi-finetune.git
