@@ -54,6 +54,7 @@ class GeneratedResponse:
     promptEnd: float
     promptText: str
     responseText: str
+    responseKind: str
     responseStart: float
     responseEnd: float
     ttsPath: str
@@ -62,6 +63,7 @@ class GeneratedResponse:
 @dataclass(frozen=True)
 class ConversationTurn:
     segment: TranscriptSegment
+    previousEnd: float | None
     nextStart: float | None
 
 
@@ -81,6 +83,7 @@ def generated_response_from_dict(data: dict[str, Any]) -> GeneratedResponse:
         promptEnd=float(data["promptEnd"]),
         promptText=str(data["promptText"]),
         responseText=str(data["responseText"]),
+        responseKind=str(data.get("responseKind", "reply")),
         responseStart=float(data["responseStart"]),
         responseEnd=float(data["responseEnd"]),
         ttsPath=str(data["ttsPath"]),
@@ -105,6 +108,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--response-delay-sec", type=float, default=0.35)
     parser.add_argument("--response-margin-sec", type=float, default=0.25)
     parser.add_argument("--merge-gap-sec", type=float, default=0.8)
+    parser.add_argument(
+        "--interaction-mode",
+        choices=["auto", "reply", "pre-question"],
+        default="auto",
+    )
+    parser.add_argument("--min-insert-gap-sec", type=float, default=0.8)
+    parser.add_argument("--pre-question-gap-sec", type=float, default=1.6)
     parser.add_argument("--short-gap-sec", type=float, default=2.0)
     parser.add_argument("--long-gap-sec", type=float, default=5.0)
     parser.add_argument("--min-response-chars", type=int, default=12)
@@ -274,9 +284,41 @@ def build_conversation_turns(
 
     turns: list[ConversationTurn] = []
     for index, segment in enumerate(grouped):
+        previous_end = grouped[index - 1].end if index > 0 else None
         next_start = grouped[index + 1].start if index + 1 < len(grouped) else None
-        turns.append(ConversationTurn(segment=segment, nextStart=next_start))
+        turns.append(
+            ConversationTurn(
+                segment=segment,
+                previousEnd=previous_end,
+                nextStart=next_start,
+            )
+        )
     return turns
+
+
+def response_char_limit_for_gap(
+    gap_sec: float | None,
+    min_response_chars: int,
+    max_response_chars: int,
+    response_delay_sec: float,
+    response_margin_sec: float,
+    short_gap_sec: float,
+    long_gap_sec: float,
+    tts_chars_per_sec: float,
+    tts_speed: float,
+) -> int:
+    if gap_sec is None:
+        return max_response_chars
+
+    gap_sec = max(0.0, gap_sec)
+    if gap_sec >= long_gap_sec:
+        return max_response_chars
+    if gap_sec <= short_gap_sec:
+        return min(max_response_chars, min_response_chars)
+
+    available_sec = max(0.0, gap_sec - response_delay_sec - response_margin_sec)
+    fitted_chars = int(available_sec * tts_chars_per_sec * max(0.1, tts_speed))
+    return max(min_response_chars, min(max_response_chars, fitted_chars))
 
 
 def response_char_limit_for_turn(
@@ -290,18 +332,101 @@ def response_char_limit_for_turn(
     tts_chars_per_sec: float,
     tts_speed: float,
 ) -> int:
-    if turn.nextStart is None:
-        return max_response_chars
+    gap_sec = None if turn.nextStart is None else turn.nextStart - turn.segment.end
+    return response_char_limit_for_gap(
+        gap_sec,
+        min_response_chars,
+        max_response_chars,
+        response_delay_sec,
+        response_margin_sec,
+        short_gap_sec,
+        long_gap_sec,
+        tts_chars_per_sec,
+        tts_speed,
+    )
 
-    gap_sec = max(0.0, turn.nextStart - turn.segment.end)
-    if gap_sec >= long_gap_sec:
-        return max_response_chars
-    if gap_sec <= short_gap_sec:
-        return min(max_response_chars, min_response_chars)
 
-    available_sec = max(0.0, gap_sec - response_delay_sec - response_margin_sec)
-    fitted_chars = int(available_sec * tts_chars_per_sec * max(0.1, tts_speed))
-    return max(min_response_chars, min(max_response_chars, fitted_chars))
+def pre_question_char_limit_for_turn(
+    turn: ConversationTurn,
+    min_response_chars: int,
+    max_response_chars: int,
+    response_delay_sec: float,
+    response_margin_sec: float,
+    short_gap_sec: float,
+    long_gap_sec: float,
+    tts_chars_per_sec: float,
+    tts_speed: float,
+) -> int:
+    gap_sec = None if turn.previousEnd is None else turn.segment.start - turn.previousEnd
+    return response_char_limit_for_gap(
+        gap_sec,
+        min_response_chars,
+        max_response_chars,
+        response_delay_sec,
+        response_margin_sec,
+        short_gap_sec,
+        long_gap_sec,
+        tts_chars_per_sec,
+        tts_speed,
+    )
+
+
+def looks_like_comment_answer(text: str) -> bool:
+    normalized = text.replace(" ", "").replace("\n", "")
+    markers = [
+        "コメント",
+        "質問",
+        "それは",
+        "それって",
+        "これは",
+        "これって",
+        "あれは",
+        "そうですね",
+        "そうだね",
+        "いや",
+        "違う",
+        "たしかに",
+        "確かに",
+        "なるほど",
+        "ありがとう",
+        "助かる",
+        "いい質問",
+        "どうなんだろう",
+        "なんでか",
+        "っていう",
+        "というと",
+    ]
+    return any(marker in normalized for marker in markers)
+
+
+def allowed_interaction_kinds(
+    interaction_mode: str,
+    turn: ConversationTurn,
+    min_insert_gap_sec: float,
+    pre_question_gap_sec: float,
+) -> list[str]:
+    reply_gap = None if turn.nextStart is None else turn.nextStart - turn.segment.end
+    previous_gap = (
+        None if turn.previousEnd is None else turn.segment.start - turn.previousEnd
+    )
+    can_reply = reply_gap is None or reply_gap >= min_insert_gap_sec
+    can_pre_question = (
+        previous_gap is not None
+        and previous_gap >= pre_question_gap_sec
+        and looks_like_comment_answer(turn.segment.text)
+    )
+
+    if interaction_mode == "reply":
+        return ["reply"]
+    if interaction_mode == "pre-question":
+        return ["pre_question"] if can_pre_question else []
+    if interaction_mode == "auto":
+        if can_pre_question and can_reply:
+            return ["pre_question", "reply"]
+        if can_pre_question:
+            return ["pre_question"]
+        return ["reply"]
+    return ["reply"]
 
 
 def load_or_create_transcript(
@@ -357,32 +482,107 @@ def save_cached_responses(
     )
 
 
-def request_chat_completion(
+def parse_interaction_response(
+    content: str,
+    allowed_kinds: list[str],
+    fallback_kind: str,
+    max_chars_by_kind: dict[str, int],
+) -> tuple[str, str]:
+    stripped = content.strip()
+    parsed: dict[str, Any] | None = None
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            data = json.loads(stripped)
+            if isinstance(data, dict):
+                parsed = data
+        except json.JSONDecodeError:
+            parsed = None
+
+    if parsed is None:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(stripped[start : end + 1])
+                if isinstance(data, dict):
+                    parsed = data
+            except json.JSONDecodeError:
+                parsed = None
+
+    if parsed is None:
+        kind = fallback_kind
+        text = stripped
+    else:
+        kind = str(parsed.get("kind", fallback_kind)).strip()
+        text_value = (
+            parsed.get("text")
+            or parsed.get("content")
+            or parsed.get("message")
+            or parsed.get("utterance")
+            or ""
+        )
+        text = str(text_value).strip()
+
+    if kind in {"pre-question", "question", "before", "before_question"}:
+        kind = "pre_question"
+    if kind not in allowed_kinds:
+        kind = fallback_kind
+    if not text:
+        text = "それってどういうことですか" if kind == "pre_question" else "なるほど"
+
+    text = text.replace("\n", " ").strip()
+    return kind, text[: max_chars_by_kind[kind]].strip()
+
+
+def request_interaction_completion(
     client: OpenAI,
     config: EnvConfig,
     transcript: list[TranscriptSegment],
     segment: TranscriptSegment,
-    max_response_chars: int,
+    allowed_kinds: list[str],
+    max_chars_by_kind: dict[str, int],
     timeout: float,
     time_until_next_sec: float | None = None,
-) -> str:
+    time_since_previous_sec: float | None = None,
+) -> tuple[str, str]:
     context = build_recent_context(transcript, segment.index)
-    timing_instruction = (
+    next_timing_instruction = (
         "次の発言まで十分な間があります。自然に少し具体的に返してください。"
         if time_until_next_sec is None
         else f"次の発言まで約{time_until_next_sec:.1f}秒です。間に合う短さで返してください。"
     )
+    previous_timing_instruction = (
+        "直前の発言からの間隔は不明です。"
+        if time_since_previous_sec is None
+        else f"直前の発言から約{time_since_previous_sec:.1f}秒空いています。"
+    )
+    kind_lines = []
+    if "reply" in allowed_kinds:
+        kind_lines.append(
+            f"- reply: 今の発言の後ろに置く自然な返事。{max_chars_by_kind['reply']}文字以内。"
+        )
+    if "pre_question" in allowed_kinds:
+        kind_lines.append(
+            "- pre_question: 今の発言の手前にあったら自然なリスナーの質問やコメント。"
+            f"{max_chars_by_kind['pre_question']}文字以内。"
+            "配信者がコメントに答えていると見える場合だけ選ぶ。"
+        )
+    fallback_kind = allowed_kinds[0]
     response = client.chat.completions.create(
         model=config.openaiModel,
         temperature=0.8,
         max_tokens=80,
+        timeout=timeout,
         messages=[
             {
                 "role": "system",
                 "content": (
                     "あなたは自然な雑談相手です。"
-                    "相手の一人配信の発言に対して、短く相槌や質問を返してください。"
+                    "一人配信の音声を、リスナーと会話しているような学習データに整えます。"
+                    "コメント読みや質問回答に見える発話なら手前のリスナー発言を作り、"
+                    "そうでない独立した説明や雑談なら発話後の返事を作ってください。"
                     "音声合成するため、括弧書き、絵文字、長い説明、メタ発言は避けてください。"
+                    "出力は必ずJSONだけにしてください。"
                 ),
             },
             {
@@ -390,8 +590,11 @@ def request_chat_completion(
                 "content": (
                     f"直近の文脈:\n{context}\n\n"
                     f"今の発言:\n{segment.text}\n\n"
-                    f"{timing_instruction}\n"
-                    f"{max_response_chars}文字以内で、会話に合う自然な返答を1つだけ返してください。"
+                    f"{previous_timing_instruction}\n"
+                    f"{next_timing_instruction}\n\n"
+                    "選べる種類:\n"
+                    f"{chr(10).join(kind_lines)}\n\n"
+                    'JSON形式: {"kind":"reply","text":"短い発話"}'
                 ),
             },
         ],
@@ -399,7 +602,45 @@ def request_chat_completion(
     content = response.choices[0].message.content
     if not content:
         raise RuntimeError(f"LLM returned an empty response: {response}")
-    return content[:max_response_chars].strip()
+    return parse_interaction_response(
+        content,
+        allowed_kinds,
+        fallback_kind,
+        max_chars_by_kind,
+    )
+
+
+def request_interaction_completion_checked(
+    client: OpenAI,
+    config: EnvConfig,
+    transcript: list[TranscriptSegment],
+    segment: TranscriptSegment,
+    allowed_kinds: list[str],
+    max_chars_by_kind: dict[str, int],
+    timeout: float,
+    time_until_next_sec: float | None = None,
+    time_since_previous_sec: float | None = None,
+) -> tuple[str, str]:
+    try:
+        return request_interaction_completion(
+            client,
+            config,
+            transcript,
+            segment,
+            allowed_kinds,
+            max_chars_by_kind,
+            timeout,
+            time_until_next_sec,
+            time_since_previous_sec,
+        )
+    except APIStatusError as error:
+        raise RuntimeError(
+            f"LLM request failed with HTTP {error.status_code}: {error.response.text[:1000]}"
+        ) from error
+    except OpenAIError as error:
+        raise RuntimeError(
+            f"LLM request failed: {error}"
+        ) from error
 
 
 def request_chat_completion_checked(
@@ -411,24 +652,18 @@ def request_chat_completion_checked(
     timeout: float,
     time_until_next_sec: float | None = None,
 ) -> str:
-    try:
-        return request_chat_completion(
-            client,
-            config,
-            transcript,
-            segment,
-            max_response_chars,
-            timeout,
-            time_until_next_sec,
-        )
-    except APIStatusError as error:
-        raise RuntimeError(
-            f"LLM request failed with HTTP {error.status_code}: {error.response.text[:1000]}"
-        ) from error
-    except OpenAIError as error:
-        raise RuntimeError(
-            f"LLM request failed: {error}"
-        ) from error
+    _, text = request_interaction_completion_checked(
+        client,
+        config,
+        transcript,
+        segment,
+        ["reply"],
+        {"reply": max_response_chars},
+        timeout,
+        time_until_next_sec,
+        None,
+    )
+    return text
 
 
 def build_recent_context(
@@ -538,6 +773,29 @@ def synthesize_tts_with_speed(
     apply_tts_speed(raw_output, output, speed)
 
 
+def response_start_for_kind(
+    response_kind: str,
+    turn: ConversationTurn,
+    tts_duration_sec: float,
+    response_delay_sec: float,
+    response_margin_sec: float,
+    next_available_start: float,
+) -> float:
+    if response_kind == "pre_question":
+        desired_start = max(
+            0.0,
+            turn.segment.start - response_margin_sec - tts_duration_sec,
+        )
+        if turn.previousEnd is None:
+            return desired_start
+        earliest_start = turn.previousEnd + response_delay_sec
+        return max(earliest_start, desired_start)
+    return max(
+        turn.segment.end + response_delay_sec,
+        next_available_start,
+    )
+
+
 def add_audio_clip(
     target: torch.Tensor,
     clip_path: Path,
@@ -608,30 +866,21 @@ def main() -> None:
         args.refresh_responses,
     )
     generated_by_index: dict[int, GeneratedResponse] = dict(cached_responses)
-    if generated_by_index:
-        next_available_start = (
-            max(response.responseEnd for response in generated_by_index.values())
-            + args.response_delay_sec
-        )
-    else:
-        next_available_start = 0.0
+    next_available_start = 0.0
     with create_progress() as progress:
         task = progress.add_task("Generating LLM replies and TTS", total=len(turns))
         for turn in turns:
             segment = turn.segment
             progress.update(task, description=f"LLM/TTS turn {segment.index + 1}")
-            cached_response = generated_by_index.get(segment.index)
-            expected_prompt = segment.text
-            if cached_response is not None and Path(cached_response.ttsPath).exists():
-                if cached_response.promptText == expected_prompt:
-                    console.print(f"[cyan]Using cached response[/cyan] turn {segment.index}")
-                    progress.advance(task)
-                    continue
-
             time_until_next = (
                 None if turn.nextStart is None else max(0.0, turn.nextStart - segment.end)
             )
-            response_chars = response_char_limit_for_turn(
+            time_since_previous = (
+                None
+                if turn.previousEnd is None
+                else max(0.0, segment.start - turn.previousEnd)
+            )
+            reply_chars = response_char_limit_for_turn(
                 turn,
                 args.min_response_chars,
                 args.max_response_chars,
@@ -642,14 +891,61 @@ def main() -> None:
                 args.tts_chars_per_sec,
                 args.tts_speed,
             )
-            response_text = request_chat_completion_checked(
+            pre_question_chars = pre_question_char_limit_for_turn(
+                turn,
+                args.min_response_chars,
+                args.max_response_chars,
+                args.response_delay_sec,
+                args.response_margin_sec,
+                args.short_gap_sec,
+                args.long_gap_sec,
+                args.tts_chars_per_sec,
+                args.tts_speed,
+            )
+            allowed_kinds = allowed_interaction_kinds(
+                args.interaction_mode,
+                turn,
+                args.min_insert_gap_sec,
+                args.pre_question_gap_sec,
+            )
+            cached_response = generated_by_index.get(segment.index)
+            expected_prompt = segment.text
+            if not allowed_kinds:
+                generated_by_index.pop(segment.index, None)
+                console.print(
+                    f"[yellow]Skipping[/yellow] turn {segment.index}: "
+                    "pre-question can not be placed naturally"
+                )
+                progress.advance(task)
+                continue
+            if cached_response is not None and Path(cached_response.ttsPath).exists():
+                if (
+                    cached_response.promptText == expected_prompt
+                    and cached_response.responseKind in allowed_kinds
+                ):
+                    console.print(f"[cyan]Using cached response[/cyan] turn {segment.index}")
+                    if cached_response.responseKind == "reply":
+                        next_available_start = max(
+                            next_available_start,
+                            cached_response.responseEnd + args.response_delay_sec,
+                        )
+                    progress.advance(task)
+                    continue
+                generated_by_index.pop(segment.index, None)
+
+            response_kind, response_text = request_interaction_completion_checked(
                 openai_client,
                 config,
                 [turn.segment for turn in turns],
                 segment,
-                response_chars,
+                allowed_kinds,
+                {
+                    "reply": reply_chars,
+                    "pre_question": pre_question_chars,
+                },
                 args.llm_timeout,
                 time_until_next,
+                time_since_previous,
             )
             tts_path = tts_root / f"response{segment.index:04d}.wav"
             raw_tts_path = tts_root / "raw" / f"response{segment.index:04d}.wav"
@@ -661,19 +957,26 @@ def main() -> None:
                 args.tts_timeout,
                 args.tts_speed,
             )
-            response_start = max(
-                segment.end + args.response_delay_sec,
+            tts_audio = load_mono_audio(tts_path, args.sample_rate)
+            tts_duration_sec = tts_audio.shape[-1] / args.sample_rate
+            response_start = response_start_for_kind(
+                response_kind,
+                turn,
+                tts_duration_sec,
+                args.response_delay_sec,
+                args.response_margin_sec,
                 next_available_start,
             )
-            tts_audio = load_mono_audio(tts_path, args.sample_rate)
-            response_end = response_start + tts_audio.shape[-1] / args.sample_rate
-            next_available_start = response_end + args.response_delay_sec
+            response_end = response_start + tts_duration_sec
+            if response_kind == "reply":
+                next_available_start = response_end + args.response_delay_sec
             generated_by_index[segment.index] = GeneratedResponse(
                 index=segment.index,
                 promptStart=segment.start,
                 promptEnd=segment.end,
                 promptText=segment.text,
                 responseText=response_text,
+                responseKind=response_kind,
                 responseStart=response_start,
                 responseEnd=response_end,
                 ttsPath=str(tts_path),
@@ -682,10 +985,18 @@ def main() -> None:
                 responses_cache_path,
                 [generated_by_index[index] for index in sorted(generated_by_index)],
             )
-            console.print(f"[{segment.index:04d}] {segment.text} -> {response_text}")
+            console.print(
+                f"[{segment.index:04d}] {response_kind} | {segment.text} -> {response_text}"
+            )
             progress.advance(task)
 
-    generated = [generated_by_index[index] for index in sorted(generated_by_index)]
+    turn_indexes = {turn.segment.index for turn in turns}
+    generated = [
+        generated_by_index[index]
+        for index in sorted(generated_by_index)
+        if index in turn_indexes
+    ]
+    save_cached_responses(responses_cache_path, generated)
     with status(f"Writing stereo wav to [bold]{args.output}[/bold]"):
         stereo = build_stereo_audio(args.input, generated, args.sample_rate)
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -701,6 +1012,7 @@ def main() -> None:
         "openaiModel": config.openaiModel,
         "ttsUrl": config.ttsUrl,
         "ttsType": config.ttsType,
+        "interactionMode": args.interaction_mode,
         "transcript": [segment.__dict__ for segment in transcript],
         "responses": [response.__dict__ for response in generated],
     }

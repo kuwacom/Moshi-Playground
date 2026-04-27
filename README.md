@@ -15,8 +15,8 @@
 - [2. モデル取得](#2-モデル取得)
 - [3. .env 設定](#3-env-設定)
 - [4. 音声素材の用意](#4-音声素材の用意)
-- [5. 前処理ツール](#5-前処理ツール)
-- [6. raw から stereo を作る](#6-raw-から-stereo-を作る)
+- [5. 完全自動でデータセットを作る](#5-完全自動でデータセットを作る)
+- [6. 手動処理と各ツール](#6-手動処理と各ツール)
 - [7. JSONL と学習用 transcript](#7-jsonl-と学習用-transcript)
 - [8. 学習](#8-学習)
 - [9. 推論確認](#9-推論確認)
@@ -254,7 +254,267 @@ PY
 
 ---
 
-## 5. 前処理ツール
+## 5. 完全自動でデータセットを作る
+
+ここでは、`datasets/raw/` に置いた一人配信音声から、学習に使う `datasets/train.jsonl` と transcript まで一気に作る流れを説明します。まずはこの方法で全体を通し、音質や応答が気になる場合だけ次の「手動処理と各ツール」で細かく調整してください。
+
+### 1. raw 音声を置く
+
+PC 側で UVR5 などを使って声だけに近い状態へ切り抜いた wav を、`datasets/raw/` に入れます。
+
+```text
+datasets/raw/source001.wav
+datasets/raw/source002.wav
+datasets/raw/source003.wav
+```
+
+### 2. 対象ファイルを確認する
+
+```bash
+uv run --project moshi-finetune python scripts/processRawToStereo.py --dry-run
+```
+
+`--dry-run` は変換せず、処理対象になるファイルだけを表示します。意図しないファイルが混ざっていないか、ここで確認してください。
+
+### 3. 少量だけ試作する
+
+```bash
+uv run --project moshi-finetune python scripts/processRawToStereo.py \
+  --limit 1 \
+  --max-segments 10 \
+  --max-response-chars 40 \
+  --response-delay-sec 0.5 \
+  --tts-speed 1.2
+```
+
+この試作では、先頭 1 ファイルの先頭 10 発話だけを処理します。Whisper、LLM 応答、TTS、stereo 合成までまとめて確認できます。
+
+確認する場所:
+
+| パス | 見ること |
+|---|---|
+| `datasets/stereo/` | 生成された2ch wav |
+| `datasets/cache/<音声ファイル名>/transcript.json` | Whisper の文字起こし |
+| `datasets/cache/<音声ファイル名>/responses.json` | LLM 応答と配置タイミング |
+| `datasets/cache/<音声ファイル名>/tts/` | 速度調整後の TTS 音声 |
+
+### 4. 問題なければ本番変換する
+
+```bash
+uv run --project moshi-finetune python scripts/processRawToStereo.py
+```
+
+`datasets/raw/` の wav をファイル名順に処理し、`datasets/stereo/` へ stereo wav を出力します。途中で失敗しても `datasets/cache/` に途中結果が残るため、再実行時は保存済みの Whisper / LLM / TTS 結果を再利用します。
+
+失敗したファイルを飛ばして続けたい場合:
+
+```bash
+uv run --project moshi-finetune python scripts/processRawToStereo.py \
+  --continue-on-error
+```
+
+### 5. JSONL と transcript を作る
+
+```bash
+uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+  --audio-dir datasets/stereo \
+  --output datasets/train.jsonl
+
+uv run --project moshi-finetune python scripts/annotateDataset.py \
+  datasets/train.jsonl \
+  --lang ja \
+  --whisper-model large-v3
+```
+
+最後に、wav と transcript json が揃っているか確認します。
+
+```bash
+uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+  --audio-dir datasets/stereo \
+  --output datasets/train.jsonl \
+  --require-transcript
+```
+
+### 途中保存と再開
+
+途中結果は `datasets/cache/<音声ファイル名>/` に保存されます。
+
+```text
+datasets/cache/solo001/
+  transcript.json        # Whisper の文字起こし結果
+  responses.json         # LLM 応答と配置タイミング
+  tts/
+    raw/
+      response0000.wav   # TTS APIの元音声
+    response0000.wav     # 速度調整後の音声
+```
+
+Whisper は特に時間がかかるため、通常は `--refresh-transcript` を付けずに再実行してください。LLM 応答や TTS だけ作り直したい場合は `--refresh-responses` を使います。
+
+`--max-segments` は処理対象を一時的に絞るだけで、`transcript.json` には全体の Whisper 結果を保存します。短い試作のあと、本番実行で Whisper をやり直す必要はありません。
+
+### 応答生成の考え方
+
+Whisper の発話間隔と発話内容を見て、右チャンネルへ入れる音声を自動で切り替えます。元音声のフィラー、息継ぎ、笑い、短い間は削りません。左チャンネルの時間軸も動かさず、右チャンネルの挿入位置だけを調整します。
+
+| 状況 | 挙動 |
+|---|---|
+| 発話間隔が `--merge-gap-sec` 以下 | 複数発話をまとめて1つの返答を生成 |
+| コメントに答えているような発話で、直前に十分な間がある | 発話の手前に「質問コメント」を生成 |
+| 独立した説明や雑談に見える発話 | 発話の後ろに「返事」を生成 |
+| 次の発話までが短い | 短い相槌寄りに文字数を制限 |
+| 次の発話まで余裕がある | しっかり返答 |
+| TTS音声 | デフォルトでピッチを変えずに `1.2` 倍速 |
+
+`--interaction-mode auto` が既定です。配信者が明らかにコメントへ返しているような場面だけ `pre_question` を選び、それ以外は `reply` として扱います。
+
+モードを固定したい場合:
+
+| モード | 挙動 |
+|---|---|
+| `--interaction-mode auto` | 手前質問コメントと返事を自動選択。手前に自然に置けない場合は返事へフォールバック |
+| `--interaction-mode pre-question` | 手前質問コメントだけ生成。自然に置けない発話はスキップ |
+| `--interaction-mode reply` | 発話後の返事だけ生成 |
+
+既に `datasets/cache/<音声名>/responses.json` がある場合はキャッシュが優先されます。ただし、現在のモードと違う種類のキャッシュは再利用しません。モードを変えて全体を作り直したい時は `--refresh-responses` を付けてください。
+
+主なオプション:
+
+| オプション | 既定値 | 用途 |
+|---|---:|---|
+| `--input-dir` | `datasets/raw` | 入力音声フォルダ |
+| `--output-dir` | `datasets/stereo` | ステレオ wav 出力先 |
+| `--cache-dir` | `datasets/cache` | Whisper/LLM/TTS の途中結果 |
+| `--dry-run` | なし | 対象ファイル一覧だけ表示 |
+| `--limit` | なし | 先頭 N ファイルだけ処理 |
+| `--max-segments` | なし | 各音声の先頭 N 発話だけ処理 |
+| `--merge-gap-sec` | `0.8` | 近い発話をまとめる秒数 |
+| `--interaction-mode` | `auto` | `auto` / `reply` / `pre-question` を選択 |
+| `--min-insert-gap-sec` | `0.8` | 返事を自然に置ける最小の発話間隔 |
+| `--pre-question-gap-sec` | `1.6` | 手前質問コメントを検討する最小の直前間隔 |
+| `--short-gap-sec` | `2.0` | 次発話までが短いと判断する秒数 |
+| `--long-gap-sec` | `5.0` | しっかり返答できると判断する秒数 |
+| `--min-response-chars` | `12` | 短い相槌の最小文字数 |
+| `--max-response-chars` | `48` | 返答の最大文字数 |
+| `--response-delay-sec` | `0.35` | 発話終了から応答開始までの待ち時間 |
+| `--response-margin-sec` | `0.25` | 次発話にかぶらないための余白 |
+| `--tts-chars-per-sec` | `8.0` | 返答文字数を決めるための読み上げ速度目安 |
+| `--tts-speed` | `1.2` | ピッチ維持の速度変更。`1.0` で無効 |
+| `--refresh-transcript` | なし | Whisper 結果を作り直す |
+| `--refresh-responses` | なし | LLM/TTS 結果を作り直す |
+| `--continue-on-error` | なし | 1ファイル失敗しても次へ進む |
+
+---
+
+## 6. 手動処理と各ツール
+
+完全自動で作った音声に違和感がある時は、以下のように工程を分けて確認します。音が崩れているのか、Whisper が崩れているのか、LLM 応答が長すぎるのか、TTS が合っていないのかを切り分けやすくなります。
+
+ツール早見表:
+
+| ツール | 使う場面 |
+|---|---|
+| `processRawToStereo.py` | raw フォルダを一括で stereo 化したい |
+| `generateSoloConversationDataset.py` | 1本だけ一人配信を stereo 化して細かく確認したい |
+| `trimSilence.py` | 長い無音だけを削りたい |
+| `extractVocalsDemucs.py` | サーバ上で簡易的に声を抽出したい |
+| `synthesizeTts.py` | TTS API だけ単体で試したい |
+| `makeStereoPair.py` | 既にある左右音声を stereo wav にしたい |
+| `prepareDatasetJsonl.py` | `datasets/stereo/` から `train.jsonl` を作りたい |
+| `annotateDataset.py` | ローカル Whisper で学習用 transcript を作りたい |
+
+### 手動で1本ずつ作る
+
+#### 1. 元音声を `datasets/raw/` に置く
+
+```text
+datasets/raw/source001.wav
+```
+
+まずは 1 本だけ置いて、音量、ノイズ、BGM、不要な無音を耳で確認します。PC 側で UVR5 を使って声だけにした音声がある場合は、その出力をここへ入れます。
+
+#### 2. 必要なら無音を詰める
+
+```bash
+uv run --project moshi-finetune python scripts/trimSilence.py \
+  --input datasets/raw/source001.wav \
+  --output datasets/raw/trimmed/source001.wav \
+  --threshold-db -45 \
+  --min-silence-sec 0.8 \
+  --keep-silence-sec 0.25
+```
+
+無音を詰めすぎると会話の自然な間が消えます。まずは既定値に近い設定で出力を聞き、待機時間だけが削れているか確認してください。
+
+#### 3. 一人配信から1本だけ stereo を作る
+
+左chに元音声、右chに LLM + TTS で作った応答を入れる場合は、単体変換スクリプトを使います。
+
+```bash
+uv run --project moshi-finetune python scripts/generateSoloConversationDataset.py \
+  --input datasets/raw/trimmed/source001.wav \
+  --output datasets/stereo/source001.wav \
+  --metadata-output datasets/stereo/source001.responses.json \
+  --max-segments 10 \
+  --tts-speed 1.2
+```
+
+確認ポイント:
+
+| 見る場所 | 確認すること |
+|---|---|
+| `datasets/stereo/source001.wav` | 左右の音が自然に並んでいるか |
+| `datasets/stereo/source001.responses.json` | どの発話にどんな応答が付いたか |
+| `datasets/cache/source001/transcript.json` | Whisper の文字起こしが大きく崩れていないか |
+| `datasets/cache/source001/responses.json` | LLM 応答の長さや内容が合っているか |
+| `datasets/cache/source001/tts/` | 生成された TTS 音声が破綻していないか |
+
+`--max-segments 10` は試作用です。問題なければ外して同じコマンドを再実行します。Whisper 結果は `datasets/cache/` に残るため、通常は最初からやり直しにはなりません。
+
+#### 4. TTS だけ単体で確認する
+
+TTS API の音色や速度を先に確認したい場合:
+
+```bash
+uv run --project moshi-finetune python scripts/synthesizeTts.py \
+  "そうなんですね、もう少し聞かせてください" \
+  --type 10 \
+  --output datasets/tts/check001.wav
+```
+
+この単体スクリプトは速度変更をしません。学習用の一人配信補完では `generateSoloConversationDataset.py` と `processRawToStereo.py` の `--tts-speed` で、ピッチを変えずに速度調整します。
+
+#### 5. 左右の音声が既にある場合は手動で stereo 化する
+
+コラボ、通話、手作業で作った応答音声など、左chと右chを別ファイルで用意できている場合は、LLM/TTS 補完を使わずに合成できます。
+
+```bash
+uv run --project moshi-finetune python scripts/makeStereoPair.py \
+  --left datasets/raw/leftSpeaker.wav \
+  --right datasets/raw/rightSpeaker.wav \
+  --output datasets/stereo/manual001.wav
+```
+
+`makeStereoPair.py` は左右を 24kHz にそろえ、短い方を無音で埋めて同じ長さにします。左右の開始タイミングがずれている場合は、事前に DAW や音声編集ソフトで合わせてから使ってください。
+
+#### 6. 良いものだけ JSONL に入れる
+
+単体確認で問題ない wav だけを `datasets/stereo/` に残してから、JSONL を作ります。
+
+```bash
+uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+  --audio-dir datasets/stereo \
+  --output datasets/train.jsonl
+```
+
+学習用 transcript まで作ったあとに欠けがないか確認する場合:
+
+```bash
+uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+  --audio-dir datasets/stereo \
+  --output datasets/train.jsonl \
+  --require-transcript
+```
 
 ### 無音区間を詰める
 
@@ -316,107 +576,6 @@ datasets/raw/demucsVocals/source001_vocals.wav
 ```
 
 Demucs は `--two-stems vocals` でボーカルと伴奏を分けますが、話者分離ツールではありません。複数人の声を人物ごとに分けたい場合は、手作業確認や話者分離ツールを併用してください。
-
----
-
-## 6. raw から stereo を作る
-
-### 一括処理
-
-`datasets/raw/` に置いた一人配信音声を、ファイル名順に `datasets/stereo/` へ変換します。
-
-```bash
-uv run --project moshi-finetune python scripts/processRawToStereo.py
-```
-
-まず対象だけ確認:
-
-```bash
-uv run --project moshi-finetune python scripts/processRawToStereo.py --dry-run
-```
-
-少量だけ試作:
-
-```bash
-uv run --project moshi-finetune python scripts/processRawToStereo.py \
-  --limit 1 \
-  --max-segments 10 \
-  --max-response-chars 40 \
-  --response-delay-sec 0.5 \
-  --tts-speed 1.2
-```
-
-### 途中保存と再開
-
-途中結果は `datasets/cache/<音声ファイル名>/` に保存されます。
-
-```text
-datasets/cache/solo001/
-  transcript.json        # Whisper の文字起こし結果
-  responses.json         # LLM 応答と配置タイミング
-  tts/
-    raw/
-      response0000.wav   # TTS APIの元音声
-    response0000.wav     # 速度調整後の音声
-```
-
-処理が途中で落ちても、次回実行時は保存済みの `transcript.json`、`responses.json`、TTS音声を再利用します。Whisper は特に時間がかかるため、通常は `--refresh-transcript` を付けずに再実行してください。
-
-`--max-segments` は処理対象を一時的に絞るだけで、`transcript.json` には全体の Whisper 結果を保存します。短い試作のあと、本番実行で Whisper をやり直す必要はありません。
-
-### 応答生成の考え方
-
-Whisper の発話間隔を見て挙動を変えます。
-
-| 状況 | 挙動 |
-|---|---|
-| 発話間隔が `--merge-gap-sec` 以下 | 複数発話をまとめて1つの返答を生成 |
-| 次の発話までが短い | 短い相槌寄り |
-| 次の発話まで余裕がある | しっかり返答 |
-| TTS音声 | デフォルトでピッチを変えずに `1.2` 倍速 |
-
-主なオプション:
-
-| オプション | 既定値 | 用途 |
-|---|---:|---|
-| `--input-dir` | `datasets/raw` | 入力音声フォルダ |
-| `--output-dir` | `datasets/stereo` | ステレオ wav 出力先 |
-| `--cache-dir` | `datasets/cache` | Whisper/LLM/TTS の途中結果 |
-| `--dry-run` | なし | 対象ファイル一覧だけ表示 |
-| `--limit` | なし | 先頭 N ファイルだけ処理 |
-| `--max-segments` | なし | 各音声の先頭 N 発話だけ処理 |
-| `--merge-gap-sec` | `0.8` | 近い発話をまとめる秒数 |
-| `--short-gap-sec` | `2.0` | 次発話までが短いと判断する秒数 |
-| `--long-gap-sec` | `5.0` | しっかり返答できると判断する秒数 |
-| `--min-response-chars` | `12` | 短い相槌の最小文字数 |
-| `--max-response-chars` | `48` | 返答の最大文字数 |
-| `--response-delay-sec` | `0.35` | 発話終了から応答開始までの待ち時間 |
-| `--response-margin-sec` | `0.25` | 次発話にかぶらないための余白 |
-| `--tts-chars-per-sec` | `8.0` | 返答文字数を決めるための読み上げ速度目安 |
-| `--tts-speed` | `1.2` | ピッチ維持の速度変更。`1.0` で無効 |
-| `--refresh-transcript` | なし | Whisper 結果を作り直す |
-| `--refresh-responses` | なし | LLM/TTS 結果を作り直す |
-| `--continue-on-error` | なし | 1ファイル失敗しても次へ進む |
-
-### 単発で stereo を作る
-
-左右の音声が既に分かれている場合:
-
-```bash
-uv run --project moshi-finetune python scripts/makeStereoPair.py \
-  --left datasets/raw/moshiSide.wav \
-  --right datasets/raw/userSide.wav \
-  --output datasets/stereo/sample001.wav
-```
-
-TTS だけ試す場合:
-
-```bash
-uv run --project moshi-finetune python scripts/synthesizeTts.py \
-  "こんにちは" \
-  --type 10 \
-  --output datasets/tts/response001.wav
-```
 
 ---
 
