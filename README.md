@@ -687,7 +687,7 @@ config/llmJpMoshiLora.yaml
 | `batch_size` | `1` |
 | `param_dtype` | `float16` |
 
-通常は `train-run.sh` を使います。先に `datasets/stereo/*.json` が揃っているか確認し、不足している場合はモデルを読み込む前に停止します。既に `loras/llmJpMoshiV1` がある場合は、削除せず `loras/llmJpMoshiV1.previous.YYYYMMDD-HHMMSS` に退避してから新しく開始します。
+通常は `train-run.sh` を使います。先に `datasets/stereo/*.json` が揃っているか確認し、不足している場合はモデルを読み込む前に停止します。既に `run_dir` の出力先がある場合は、削除せず `*.previous.YYYYMMDD-HHMMSS` に退避してから新しく開始します。
 
 1 GPU:
 

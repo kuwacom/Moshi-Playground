@@ -8,7 +8,7 @@ uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
   --output datasets/train.jsonl \
   --require-transcript
 
-# 既存のLoRA出力がある場合は消さずにタイムスタンプ付きで退避する
+# 既存の出力先がある場合は消さずにタイムスタンプ付きで退避する
 run_dir="${RUN_DIR:-loras/llmJpMoshiV1}"
 if [ -e "$run_dir" ]; then
   archived_run_dir="${run_dir}.previous.$(date +%Y%m%d-%H%M%S)"
@@ -21,12 +21,14 @@ gpu_ids="${CUDA_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}"
 IFS=',' read -ra gpu_id_list <<< "$gpu_ids"
 nproc_per_node="${NPROC_PER_NODE:-${#gpu_id_list[@]}}"
 master_port="${MASTER_PORT:-29501}"
+config_path="${CONFIG_PATH:-config/llmJpMoshiLora.yaml}"
 
 echo "Training configuration"
 echo "  CUDA_DEVICES:          $gpu_ids"
 echo "  nproc_per_node:       $nproc_per_node"
 echo "  master_port:          $master_port"
 echo "  run_dir:              $run_dir"
+echo "  config_path:          $config_path"
 
 # llm-jp/llm-jp-moshi-v1をLoRAで学習する
 CUDA_VISIBLE_DEVICES="$gpu_ids" \
@@ -36,4 +38,4 @@ uv run --project moshi-finetune torchrun \
   --nproc-per-node "$nproc_per_node" \
   --master_port "$master_port" \
   moshi-finetune/train.py \
-  config/llmJpMoshiLora.yaml
+  "$config_path"
