@@ -687,38 +687,40 @@ config/llmJpMoshiLora.yaml
 | `batch_size` | `1` |
 | `param_dtype` | `float16` |
 
-1 GPU:
-
 通常は `train-run.sh` を使います。先に `datasets/stereo/*.json` が揃っているか確認し、不足している場合はモデルを読み込む前に停止します。既に `loras/llmJpMoshiV1` がある場合は、削除せず `loras/llmJpMoshiV1.previous.YYYYMMDD-HHMMSS` に退避してから新しく開始します。
+
+1 GPU:
 
 ```bash
 bash train-run.sh
 ```
 
+複数 GPU:
+
+```bash
+CUDA_DEVICES=0,1,2,3 bash train-run.sh
+```
+
+`train-run.sh` は `CUDA_DEVICES` の数から `torchrun --nproc-per-node` を自動設定します。明示したい場合は `NPROC_PER_NODE` を指定します。内部では PyTorch 標準の `CUDA_VISIBLE_DEVICES` に変換して実行します。
+
+```bash
+CUDA_DEVICES=0,1,2,3 NPROC_PER_NODE=4 bash train-run.sh
+```
+
 手動で実行する場合:
 
 ```bash
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
 NO_TORCH_COMPILE="${NO_TORCH_COMPILE:-1}" \
 HF_HOME="$PWD/models/huggingface" \
 uv run --project moshi-finetune torchrun \
-  --nproc-per-node 1 \
-  moshi-finetune/train.py \
-  config/llmJpMoshiLora.yaml
-```
-
-8 GPU:
-
-```bash
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}" \
-NO_TORCH_COMPILE="${NO_TORCH_COMPILE:-1}" \
-HF_HOME="$PWD/models/huggingface" \
-uv run --project moshi-finetune torchrun \
-  --nproc-per-node 8 \
+  --nproc-per-node 4 \
   --master_port 29501 \
   moshi-finetune/train.py \
   config/llmJpMoshiLora.yaml
 ```
+
+別の分散ジョブと同時に動かす場合は、`MASTER_PORT=29502 bash train-run.sh` のようにポートを変えてください。
 
 Tesla P40 など CUDA Capability 7.0 未満のGPUでは、PyTorch Inductor / Triton のコンパイルが使えません。`NO_TORCH_COMPILE=1` はその最適化を切って eager 実行にするための設定です。新しいGPUで速度を優先したい場合だけ `NO_TORCH_COMPILE=0` を明示してください。
 
@@ -752,6 +754,27 @@ bash start.sh
 ```
 
 `start.sh` は最新 checkpoint を `loras/llmJpMoshiV1/latest/` にコピーしてから、その LoRA で Moshi server を起動します。起動後、`http://localhost:8998` にアクセスします。
+
+推論は `moshi.server` が1プロセス1GPUの構成です。モデルを複数GPUへ分割するのではなく、複数GPUで試したい場合はGPUごとに別ポートでサーバーを起動します。
+
+```bash
+CUDA_DEVICES=0 bash start.sh --port 8998
+CUDA_DEVICES=1 bash start.sh --port 8999
+```
+
+古いGPUで float16 推論にしたい場合:
+
+```bash
+bash start.sh --half
+```
+
+GPU メモリが足りない場合は、float16 と LoRA 融合の無効化を試します。
+
+```bash
+bash start.sh --half --no_fuse_lora
+```
+
+`--half` は bfloat16 ではなく float16 で読み込む設定で、特に Tesla P40 など古いGPUではほぼ必須です。`--no_fuse_lora` は LoRA をベース重みに融合する処理を避けるため、起動時の一時的なメモリ増加を抑えられることがあります。
 
 途中の checkpoint を直接テストしたい場合:
 

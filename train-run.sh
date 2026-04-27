@@ -17,11 +17,23 @@ if [ -e "$run_dir" ]; then
   mv "$run_dir" "$archived_run_dir"
 fi
 
+gpu_ids="${CUDA_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}"
+IFS=',' read -ra gpu_id_list <<< "$gpu_ids"
+nproc_per_node="${NPROC_PER_NODE:-${#gpu_id_list[@]}}"
+master_port="${MASTER_PORT:-29501}"
+
+echo "Training configuration"
+echo "  CUDA_DEVICES:          $gpu_ids"
+echo "  nproc_per_node:       $nproc_per_node"
+echo "  master_port:          $master_port"
+echo "  run_dir:              $run_dir"
+
 # llm-jp/llm-jp-moshi-v1をLoRAで学習する
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
+CUDA_VISIBLE_DEVICES="$gpu_ids" \
 NO_TORCH_COMPILE="${NO_TORCH_COMPILE:-1}" \
 HF_HOME="$PWD/models/huggingface" \
 uv run --project moshi-finetune torchrun \
-  --nproc-per-node 1 \
+  --nproc-per-node "$nproc_per_node" \
+  --master_port "$master_port" \
   moshi-finetune/train.py \
   config/llmJpMoshiLora.yaml
