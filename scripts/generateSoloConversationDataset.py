@@ -28,6 +28,7 @@ DEFAULT_OPENAI_BASE_URL = "https://litellm.kuwa.dev/v1"
 DEFAULT_OPENAI_MODEL = "anthropic/claude-sonnet-4.6"
 DEFAULT_TTS_URL = "https://api.kuwa.app/v1/capcut/synthesize"
 DEFAULT_TTS_TYPE = "10"
+BALANCE_FILL_INDEX_BASE = 10_000_000
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-response-chars", type=int, default=48)
     parser.add_argument("--tts-chars-per-sec", type=float, default=8.0)
     parser.add_argument("--tts-speed", type=float, default=1.2)
+    parser.add_argument(
+        "--balance-fill-mode",
+        choices=["auto", "always", "off"],
+        default="auto",
+    )
+    parser.add_argument("--target-right-ratio", type=float, default=0.4)
+    parser.add_argument("--max-right-ratio", type=float, default=0.5)
+    parser.add_argument("--long-turn-fill-sec", type=float, default=12.0)
+    parser.add_argument("--fill-interval-sec", type=float, default=6.0)
+    parser.add_argument("--fill-max-chars", type=int, default=14)
     parser.add_argument("--min-segment-sec", type=float, default=0.4)
     parser.add_argument("--max-segments", type=int)
     parser.add_argument("--keep-tts-dir", type=Path)
@@ -666,6 +677,77 @@ def request_chat_completion_checked(
     return text
 
 
+def request_balance_fill_completion(
+    client: OpenAI,
+    config: EnvConfig,
+    transcript: list[TranscriptSegment],
+    turn: ConversationTurn,
+    insert_sec: float,
+    max_chars: int,
+    timeout: float,
+) -> str:
+    context = build_recent_context(transcript, turn.segment.index)
+    offset_sec = max(0.0, insert_sec - turn.segment.start)
+    response = client.chat.completions.create(
+        model=config.openaiModel,
+        temperature=0.85,
+        max_tokens=60,
+        timeout=timeout,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "あなたは一人配信を自然な双方向会話データへ整える編集者です。"
+                    "配信者が長く話している途中に、右チャンネルへ短いリスナー音声を差し込みます。"
+                    "話を遮らず、内容に軽く合う相槌、驚き、短い促しを作ってください。"
+                    "質問で話題を変えないでください。括弧書き、絵文字、説明、メタ発言は禁止です。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"直近の文脈:\n{context}\n\n"
+                    f"長い発話:\n{turn.segment.text}\n\n"
+                    f"差し込み位置: この発話の開始から約{offset_sec:.1f}秒後\n"
+                    f"{max_chars}文字以内で、自然な短いリスナー発話を1つだけ返してください。"
+                ),
+            },
+        ],
+    )
+    content = response.choices[0].message.content
+    if not content:
+        raise RuntimeError(f"LLM returned an empty balance-fill response: {response}")
+    return content.replace("\n", " ").strip()[:max_chars]
+
+
+def request_balance_fill_completion_checked(
+    client: OpenAI,
+    config: EnvConfig,
+    transcript: list[TranscriptSegment],
+    turn: ConversationTurn,
+    insert_sec: float,
+    max_chars: int,
+    timeout: float,
+) -> str:
+    try:
+        return request_balance_fill_completion(
+            client,
+            config,
+            transcript,
+            turn,
+            insert_sec,
+            max_chars,
+            timeout,
+        )
+    except APIStatusError as error:
+        raise RuntimeError(
+            f"LLM balance-fill request failed with HTTP {error.status_code}: "
+            f"{error.response.text[:1000]}"
+        ) from error
+    except OpenAIError as error:
+        raise RuntimeError(f"LLM balance-fill request failed: {error}") from error
+
+
 def build_recent_context(
     transcript: list[TranscriptSegment],
     current_index: int,
@@ -794,6 +876,206 @@ def response_start_for_kind(
         turn.segment.end + response_delay_sec,
         next_available_start,
     )
+
+
+def balance_fill_enabled(balance_fill_mode: str, interaction_mode: str) -> bool:
+    if balance_fill_mode == "off":
+        return False
+    if balance_fill_mode == "always":
+        return True
+    return interaction_mode == "auto"
+
+
+def balance_fill_index(segment_index: int, fill_index: int) -> int:
+    return BALANCE_FILL_INDEX_BASE + segment_index * 1000 + fill_index
+
+
+def response_belongs_to_turns(
+    response: GeneratedResponse,
+    turn_indexes: set[int],
+) -> bool:
+    if response.index in turn_indexes:
+        return True
+    if response.index < BALANCE_FILL_INDEX_BASE:
+        return False
+    segment_index = (response.index - BALANCE_FILL_INDEX_BASE) // 1000
+    return segment_index in turn_indexes
+
+
+def speech_seconds_for_turns(turns: list[ConversationTurn]) -> float:
+    return sum(max(0.0, turn.segment.end - turn.segment.start) for turn in turns)
+
+
+def speech_seconds_for_responses(responses: list[GeneratedResponse]) -> float:
+    return sum(max(0.0, item.responseEnd - item.responseStart) for item in responses)
+
+
+def right_speech_ratio(
+    left_speech_sec: float,
+    right_speech_sec: float,
+) -> float:
+    total = left_speech_sec + right_speech_sec
+    if total <= 0.0:
+        return 0.0
+    return right_speech_sec / total
+
+
+def response_interval_overlaps(
+    start_sec: float,
+    end_sec: float,
+    responses: list[GeneratedResponse],
+    margin_sec: float,
+) -> bool:
+    for response in responses:
+        if start_sec < response.responseEnd + margin_sec and end_sec > response.responseStart - margin_sec:
+            return True
+    return False
+
+
+def add_balance_fill_responses(
+    client: OpenAI,
+    config: EnvConfig,
+    turns: list[ConversationTurn],
+    transcript: list[TranscriptSegment],
+    generated_by_index: dict[int, GeneratedResponse],
+    responses_cache_path: Path,
+    tts_root: Path,
+    sample_rate: int,
+    tts_timeout: float,
+    tts_speed: float,
+    response_margin_sec: float,
+    target_right_ratio: float,
+    max_right_ratio: float,
+    long_turn_fill_sec: float,
+    fill_interval_sec: float,
+    fill_max_chars: int,
+    llm_timeout: float,
+) -> dict[str, float]:
+    left_speech_sec = speech_seconds_for_turns(turns)
+    right_speech_sec = speech_seconds_for_responses(list(generated_by_index.values()))
+    initial_ratio = right_speech_ratio(left_speech_sec, right_speech_sec)
+    if target_right_ratio <= 0.0 or initial_ratio >= target_right_ratio:
+        return {
+            "leftSpeechSec": left_speech_sec,
+            "rightSpeechSec": right_speech_sec,
+            "rightRatio": initial_ratio,
+            "addedFillCount": 0,
+        }
+
+    added_count = 0
+    candidates: list[tuple[ConversationTurn, int, float]] = []
+    for turn in turns:
+        duration_sec = turn.segment.end - turn.segment.start
+        if duration_sec < long_turn_fill_sec:
+            continue
+        fill_index = 0
+        cursor_sec = turn.segment.start + fill_interval_sec
+        latest_start_sec = turn.segment.end - response_margin_sec
+        while cursor_sec < latest_start_sec:
+            candidates.append((turn, fill_index, cursor_sec))
+            fill_index += 1
+            cursor_sec += fill_interval_sec
+
+    if not candidates:
+        return {
+            "leftSpeechSec": left_speech_sec,
+            "rightSpeechSec": right_speech_sec,
+            "rightRatio": initial_ratio,
+            "addedFillCount": 0,
+        }
+
+    with create_progress() as progress:
+        task = progress.add_task("Balancing right-channel speech", total=len(candidates))
+        for candidate_index, (turn, fill_index, start_sec) in enumerate(candidates):
+            current_ratio = right_speech_ratio(left_speech_sec, right_speech_sec)
+            if current_ratio >= target_right_ratio:
+                break
+
+            response_index = balance_fill_index(turn.segment.index, fill_index)
+            cached_response = generated_by_index.get(response_index)
+            if (
+                cached_response is not None
+                and cached_response.responseKind == "balance_fill_llm"
+                and Path(cached_response.ttsPath).exists()
+            ):
+                progress.advance(task)
+                continue
+            if cached_response is not None:
+                generated_by_index.pop(response_index, None)
+
+            text = request_balance_fill_completion_checked(
+                client,
+                config,
+                transcript,
+                turn,
+                start_sec,
+                fill_max_chars,
+                llm_timeout,
+            )
+            tts_path = tts_root / f"fill{turn.segment.index:04d}_{fill_index:02d}.wav"
+            raw_tts_path = tts_root / "raw" / f"fill{turn.segment.index:04d}_{fill_index:02d}.wav"
+            synthesize_tts_with_speed(
+                config,
+                text,
+                raw_tts_path,
+                tts_path,
+                tts_timeout,
+                tts_speed,
+            )
+            tts_audio = load_mono_audio(tts_path, sample_rate)
+            tts_duration_sec = tts_audio.shape[-1] / sample_rate
+            adjusted_start_sec = min(
+                start_sec,
+                max(turn.segment.start, turn.segment.end - response_margin_sec - tts_duration_sec),
+            )
+            end_sec = adjusted_start_sec + tts_duration_sec
+            if end_sec > turn.segment.end - response_margin_sec:
+                progress.advance(task)
+                continue
+            if response_interval_overlaps(
+                adjusted_start_sec,
+                end_sec,
+                list(generated_by_index.values()),
+                response_margin_sec,
+            ):
+                progress.advance(task)
+                continue
+
+            new_right_speech_sec = right_speech_sec + tts_duration_sec
+            new_ratio = right_speech_ratio(left_speech_sec, new_right_speech_sec)
+            if new_ratio > max_right_ratio:
+                progress.advance(task)
+                continue
+
+            generated_by_index[response_index] = GeneratedResponse(
+                index=response_index,
+                promptStart=turn.segment.start,
+                promptEnd=turn.segment.end,
+                promptText=turn.segment.text,
+                responseText=text,
+                responseKind="balance_fill_llm",
+                responseStart=adjusted_start_sec,
+                responseEnd=end_sec,
+                ttsPath=str(tts_path),
+            )
+            right_speech_sec = new_right_speech_sec
+            added_count += 1
+            save_cached_responses(
+                responses_cache_path,
+                [generated_by_index[index] for index in sorted(generated_by_index)],
+            )
+            console.print(
+                f"[cyan]Balance fill[/cyan] {turn.segment.index}:{fill_index} "
+                f"{adjusted_start_sec:.2f}s -> {text}"
+            )
+            progress.advance(task)
+
+    return {
+        "leftSpeechSec": left_speech_sec,
+        "rightSpeechSec": right_speech_sec,
+        "rightRatio": right_speech_ratio(left_speech_sec, right_speech_sec),
+        "addedFillCount": added_count,
+    }
 
 
 def add_audio_clip(
@@ -991,11 +1273,42 @@ def main() -> None:
             progress.advance(task)
 
     turn_indexes = {turn.segment.index for turn in turns}
-    generated = [
-        generated_by_index[index]
-        for index in sorted(generated_by_index)
-        if index in turn_indexes
-    ]
+    generated_by_index = {
+        index: response
+        for index, response in generated_by_index.items()
+        if response_belongs_to_turns(response, turn_indexes)
+        and response.responseKind != "balance_fill"
+    }
+    balance_stats = {
+        "leftSpeechSec": speech_seconds_for_turns(turns),
+        "rightSpeechSec": speech_seconds_for_responses(list(generated_by_index.values())),
+        "rightRatio": right_speech_ratio(
+            speech_seconds_for_turns(turns),
+            speech_seconds_for_responses(list(generated_by_index.values())),
+        ),
+        "addedFillCount": 0,
+    }
+    if balance_fill_enabled(args.balance_fill_mode, args.interaction_mode):
+        balance_stats = add_balance_fill_responses(
+            openai_client,
+            config,
+            turns,
+            [turn.segment for turn in turns],
+            generated_by_index,
+            responses_cache_path,
+            tts_root,
+            args.sample_rate,
+            args.tts_timeout,
+            args.tts_speed,
+            args.response_margin_sec,
+            args.target_right_ratio,
+            args.max_right_ratio,
+            args.long_turn_fill_sec,
+            args.fill_interval_sec,
+            args.fill_max_chars,
+            args.llm_timeout,
+        )
+    generated = [generated_by_index[index] for index in sorted(generated_by_index)]
     save_cached_responses(responses_cache_path, generated)
     with status(f"Writing stereo wav to [bold]{args.output}[/bold]"):
         stereo = build_stereo_audio(args.input, generated, args.sample_rate)
@@ -1013,6 +1326,11 @@ def main() -> None:
         "ttsUrl": config.ttsUrl,
         "ttsType": config.ttsType,
         "interactionMode": args.interaction_mode,
+        "balanceFillMode": args.balance_fill_mode,
+        "targetRightRatio": args.target_right_ratio,
+        "maxRightRatio": args.max_right_ratio,
+        "fillMaxChars": args.fill_max_chars,
+        "balanceStats": balance_stats,
         "transcript": [segment.__dict__ for segment in transcript],
         "responses": [response.__dict__ for response in generated],
     }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import sphn
@@ -20,6 +21,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def path_for_jsonl(path: Path, jsonl_path: Path) -> str:
+    return os.path.relpath(path, start=jsonl_path.parent)
+
+
 def main() -> None:
     args = parse_args()
     paths = sorted(args.audio_dir.glob(args.pattern))
@@ -34,7 +39,14 @@ def main() -> None:
         ]
         if missing:
             missing_list = "\n".join(str(path) for path in missing[:20])
-            raise FileNotFoundError(f"Missing transcript json files:\n{missing_list}")
+            raise SystemExit(
+                "Missing transcript json files:\n"
+                f"{missing_list}\n\n"
+                "Create them with:\n"
+                "uv run --project moshi-finetune python scripts/annotateDataset.py "
+                f"{args.output} --lang ja --whisper-model large-v3 "
+                "--whisper-cache-dir models/whisper"
+            )
 
     with status(f"Reading durations for [bold]{len(paths)}[/bold] audio files"):
         durations = sphn.durations([str(path) for path in paths])
@@ -46,7 +58,10 @@ def main() -> None:
             for path, duration in zip(paths, durations, strict=True):
                 if duration is not None:
                     json.dump(
-                        {"path": str(path), "duration": float(duration)},
+                        {
+                            "path": path_for_jsonl(path, args.output),
+                            "duration": float(duration),
+                        },
                         output_file,
                         ensure_ascii=False,
                     )

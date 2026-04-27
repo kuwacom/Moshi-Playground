@@ -47,19 +47,11 @@ uv run --project moshi-finetune python scripts/processRawToStereo.py \
   --limit 1 \
   --max-segments 10
 
-# 6. 問題なければ本番変換
-uv run --project moshi-finetune python scripts/processRawToStereo.py
+# 6. 問題なければデータセット準備を一括実行
+bash prepare-dataset.sh
 
-# 7. JSONL と学習用文字起こし
-uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py
-uv run --project moshi-finetune python scripts/annotateDataset.py datasets/train.jsonl --lang ja
-
-# 8. 学習
-HF_HOME="$PWD/models/huggingface" \
-uv run --project moshi-finetune torchrun \
-  --nproc-per-node 1 \
-  moshi-finetune/train.py \
-  config/llmJpMoshiLora.yaml
+# 7. 学習
+bash train-run.sh
 ```
 
 ---
@@ -130,7 +122,7 @@ bash scripts/bootstrapMoshiEnv.sh
 
 ## 2. モデル取得
 
-モデル本体と Hugging Face キャッシュは `models/` に置きます。
+モデル本体は Hugging Face Hub キャッシュとして `models/huggingface/hub/` に置きます。`scripts/downloadModel.py` は通常、別のフルコピーを作らず、このキャッシュだけを使います。
 
 ```bash
 HF_HOME="$PWD/models/huggingface" \
@@ -138,6 +130,8 @@ uv run --project moshi-finetune python scripts/downloadModel.py
 ```
 
 学習設定では `config/llmJpMoshiLora.yaml` の `hf_repo_id` に `llm-jp/llm-jp-moshi-v1` を指定しています。
+
+`models/llm-jp-moshi-v1/` のような直接コピーは学習には不要です。`--local-dir` を明示した場合だけ作成してください。
 
 ---
 
@@ -300,6 +294,22 @@ uv run --project moshi-finetune python scripts/processRawToStereo.py \
 
 ### 4. 問題なければ本番変換する
 
+データセット準備をまとめて実行する場合:
+
+```bash
+bash prepare-dataset.sh
+```
+
+`prepare-dataset.sh` は以下を順番に実行します。
+
+| 処理 | 内容 |
+|---|---|
+| `processRawToStereo.py` | raw音声をstereo学習音声へ変換 |
+| `prepareDatasetJsonl.py` | `datasets/stereo/` から `datasets/train.jsonl` を生成 |
+| `annotateDataset.py` | Whisper large-v3 で学習用 transcript json を生成 |
+
+各ステップを個別に調整したい場合は、以下のように手動で実行します。
+
 ```bash
 uv run --project moshi-finetune python scripts/processRawToStereo.py
 ```
@@ -323,7 +333,8 @@ uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
 uv run --project moshi-finetune python scripts/annotateDataset.py \
   datasets/train.jsonl \
   --lang ja \
-  --whisper-model large-v3
+  --whisper-model large-v3 \
+  --whisper-cache-dir models/whisper
 ```
 
 最後に、wav と transcript json が揃っているか確認します。
@@ -364,6 +375,7 @@ Whisper の発話間隔と発話内容を見て、右チャンネルへ入れる
 | 独立した説明や雑談に見える発話 | 発話の後ろに「返事」を生成 |
 | 次の発話までが短い | 短い相槌寄りに文字数を制限 |
 | 次の発話まで余裕がある | しっかり返答 |
+| 左chの長い発話で右ch比率が足りない | 発話の途中に短い相槌を追加 |
 | TTS音声 | デフォルトでピッチを変えずに `1.2` 倍速 |
 
 `--interaction-mode auto` が既定です。配信者が明らかにコメントへ返しているような場面だけ `pre_question` を選び、それ以外は `reply` として扱います。
@@ -377,6 +389,18 @@ Whisper の発話間隔と発話内容を見て、右チャンネルへ入れる
 | `--interaction-mode reply` | 発話後の返事だけ生成 |
 
 既に `datasets/cache/<音声名>/responses.json` がある場合はキャッシュが優先されます。ただし、現在のモードと違う種類のキャッシュは再利用しません。モードを変えて全体を作り直したい時は `--refresh-responses` を付けてください。
+
+### 左右の発話量バランス
+
+Moshi の学習データでは、左chだけが長く続くより、右chもある程度しゃべっている方が安定しやすいです。このため既定では、`--interaction-mode auto` の時に、右chの発話量が足りなければ長い左ch発話の途中へ短い相槌を追加します。
+
+発話量は Whisper の発話区間と生成TTSの長さから概算します。
+
+```text
+rightRatio = 右ch発話秒数 / (左ch発話秒数 + 右ch発話秒数)
+```
+
+既定では `--target-right-ratio 0.4` を目標にし、`--max-right-ratio 0.5` を超えない範囲で補完します。つまり、左ch : 右ch がだいたい `60:40` 付近になるように、長い説明の途中へ文脈に合う短い相槌や促しをLLMで生成して足します。元音声は削らず、左chの時間軸も動かしません。
 
 主なオプション:
 
@@ -400,6 +424,12 @@ Whisper の発話間隔と発話内容を見て、右チャンネルへ入れる
 | `--response-margin-sec` | `0.25` | 次発話にかぶらないための余白 |
 | `--tts-chars-per-sec` | `8.0` | 返答文字数を決めるための読み上げ速度目安 |
 | `--tts-speed` | `1.2` | ピッチ維持の速度変更。`1.0` で無効 |
+| `--balance-fill-mode` | `auto` | `auto` は `interaction-mode auto` の時だけ比率補完。`always` で常時、`off` で無効 |
+| `--target-right-ratio` | `0.4` | 目標の右ch発話比率 |
+| `--max-right-ratio` | `0.5` | 右chを増やしすぎない上限 |
+| `--long-turn-fill-sec` | `12.0` | この秒数以上の左ch発話を途中補完の対象にする |
+| `--fill-interval-sec` | `6.0` | 長い左ch発話の中で相槌候補を置く間隔 |
+| `--fill-max-chars` | `14` | 比率補完で挿入する短い発話の最大文字数 |
 | `--refresh-transcript` | なし | Whisper 結果を作り直す |
 | `--refresh-responses` | なし | LLM/TTS 結果を作り直す |
 | `--continue-on-error` | なし | 1ファイル失敗しても次へ進む |
@@ -592,8 +622,10 @@ uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
 形式:
 
 ```json
-{"path": "datasets/stereo/sample001.wav", "duration": 12.34}
+{"path": "stereo/sample001.wav", "duration": 12.34}
 ```
+
+`path` は `datasets/train.jsonl` からの相対パスで保存します。`datasets/stereo/...` と書くと、学習時に `datasets/datasets/stereo/...` と二重解決されて音声が見つからなくなります。
 
 学習用 transcript を生成します。Whisper はローカル実行で、基本は `large-v3` を使います。
 
@@ -601,8 +633,29 @@ uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
 uv run --project moshi-finetune python scripts/annotateDataset.py \
   datasets/train.jsonl \
   --lang ja \
-  --whisper-model large-v3
+  --whisper-model large-v3 \
+  --whisper-cache-dir models/whisper
 ```
+
+既に近似生成した `datasets/stereo/*.json` がある場合、`annotateDataset.py` は既存ファイルをスキップします。Whisper で作り直す場合は `--overwrite-existing` を付けます。
+
+```bash
+uv run --project moshi-finetune python scripts/annotateDataset.py \
+  datasets/train.jsonl \
+  --lang ja \
+  --whisper-model large-v3 \
+  --whisper-cache-dir models/whisper \
+  --overwrite-existing
+```
+
+すでに `processRawToStereo.py` で作った `datasets/stereo/*.responses.json` があり、Whisper を再実行せずにまず学習を通したい場合は、近似 transcript を作れます。
+
+```bash
+uv run --project moshi-finetune python scripts/createAnnotationJsonFromResponses.py \
+  datasets/train.jsonl
+```
+
+これは `*.responses.json` 内のセグメント時刻から `datasets/stereo/*.json` を作る高速な方法です。ただし word timestamp ではなく近似なので、品質優先では `annotateDataset.py` を使ってください。
 
 wav と json が揃っているか確認:
 
@@ -636,7 +689,17 @@ config/llmJpMoshiLora.yaml
 
 1 GPU:
 
+通常は `train-run.sh` を使います。先に `datasets/stereo/*.json` が揃っているか確認し、不足している場合はモデルを読み込む前に停止します。既に `loras/llmJpMoshiV1` がある場合は、削除せず `loras/llmJpMoshiV1.previous.YYYYMMDD-HHMMSS` に退避してから新しく開始します。
+
 ```bash
+bash train-run.sh
+```
+
+手動で実行する場合:
+
+```bash
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
+NO_TORCH_COMPILE="${NO_TORCH_COMPILE:-1}" \
 HF_HOME="$PWD/models/huggingface" \
 uv run --project moshi-finetune torchrun \
   --nproc-per-node 1 \
@@ -647,6 +710,8 @@ uv run --project moshi-finetune torchrun \
 8 GPU:
 
 ```bash
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}" \
+NO_TORCH_COMPILE="${NO_TORCH_COMPILE:-1}" \
 HF_HOME="$PWD/models/huggingface" \
 uv run --project moshi-finetune torchrun \
   --nproc-per-node 8 \
@@ -654,6 +719,8 @@ uv run --project moshi-finetune torchrun \
   moshi-finetune/train.py \
   config/llmJpMoshiLora.yaml
 ```
+
+Tesla P40 など CUDA Capability 7.0 未満のGPUでは、PyTorch Inductor / Triton のコンパイルが使えません。`NO_TORCH_COMPILE=1` はその最適化を切って eager 実行にするための設定です。新しいGPUで速度を優先したい場合だけ `NO_TORCH_COMPILE=0` を明示してください。
 
 LoRA は以下に保存されます。
 
@@ -678,15 +745,36 @@ loras/llmJpMoshiV1/latest/config.json
 
 ## 9. 推論確認
 
+一番簡単な起動:
+
+```bash
+bash start.sh
+```
+
+`start.sh` は最新 checkpoint を `loras/llmJpMoshiV1/latest/` にコピーしてから、その LoRA で Moshi server を起動します。起動後、`http://localhost:8998` にアクセスします。
+
+途中の checkpoint を直接テストしたい場合:
+
+```bash
+LORA_WEIGHT=loras/llmJpMoshiV1/checkpoints/checkpoint_001200/consolidated/lora.safetensors \
+CONFIG_PATH=loras/llmJpMoshiV1/checkpoints/checkpoint_001200/consolidated/config.json \
+bash start.sh
+```
+
+`LORA_WEIGHT` と `CONFIG_PATH` は同じ checkpoint のペアを指定してください。
+
+手動で起動する場合:
+
 ```bash
 HF_HOME="$PWD/models/huggingface" \
+NO_TORCH_COMPILE=1 \
 uv run --project moshi-finetune python -m moshi.server \
   --hf-repo llm-jp/llm-jp-moshi-v1 \
   --lora-weight loras/llmJpMoshiV1/latest/lora.safetensors \
   --config-path loras/llmJpMoshiV1/latest/config.json
 ```
 
-起動後、`http://localhost:8998` にアクセスします。エコーを避けるため、確認時はイヤホンかヘッドホンを使ってください。
+エコーを避けるため、確認時はイヤホンかヘッドホンを使ってください。
 
 ---
 

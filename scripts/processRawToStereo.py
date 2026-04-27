@@ -8,8 +8,10 @@ import torchaudio
 
 from generateSoloConversationDataset import (
     GeneratedResponse,
+    add_balance_fill_responses,
     build_conversation_turns,
     build_stereo_audio,
+    balance_fill_enabled,
     create_openai_client,
     load_env_config,
     load_mono_audio,
@@ -21,6 +23,7 @@ from generateSoloConversationDataset import (
     request_interaction_completion_checked,
     response_char_limit_for_turn,
     response_start_for_kind,
+    response_belongs_to_turns,
     save_cached_responses,
     synthesize_tts_with_speed,
     transcribe_audio_with_model,
@@ -63,6 +66,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-response-chars", type=int, default=48)
     parser.add_argument("--tts-chars-per-sec", type=float, default=8.0)
     parser.add_argument("--tts-speed", type=float, default=1.2)
+    parser.add_argument(
+        "--balance-fill-mode",
+        choices=["auto", "always", "off"],
+        default="auto",
+    )
+    parser.add_argument("--target-right-ratio", type=float, default=0.4)
+    parser.add_argument("--max-right-ratio", type=float, default=0.5)
+    parser.add_argument("--long-turn-fill-sec", type=float, default=12.0)
+    parser.add_argument("--fill-interval-sec", type=float, default=6.0)
+    parser.add_argument("--fill-max-chars", type=int, default=14)
     parser.add_argument("--min-segment-sec", type=float, default=0.4)
     parser.add_argument("--max-segments", type=int)
     parser.add_argument("--refresh-transcript", action="store_true")
@@ -257,11 +270,50 @@ def process_one(
             progress.advance(task)
 
     turn_indexes = {turn.segment.index for turn in turns}
-    generated = [
-        generated_by_index[index]
-        for index in sorted(generated_by_index)
-        if index in turn_indexes
-    ]
+    generated_by_index = {
+        index: response
+        for index, response in generated_by_index.items()
+        if response_belongs_to_turns(response, turn_indexes)
+        and response.responseKind != "balance_fill"
+    }
+    left_speech_sec = sum(
+        max(0.0, turn.segment.end - turn.segment.start) for turn in turns
+    )
+    right_speech_sec = sum(
+        max(0.0, response.responseEnd - response.responseStart)
+        for response in generated_by_index.values()
+    )
+    balance_stats = {
+        "leftSpeechSec": left_speech_sec,
+        "rightSpeechSec": right_speech_sec,
+        "rightRatio": (
+            0.0
+            if left_speech_sec + right_speech_sec <= 0.0
+            else right_speech_sec / (left_speech_sec + right_speech_sec)
+        ),
+        "addedFillCount": 0,
+    }
+    if balance_fill_enabled(args.balance_fill_mode, args.interaction_mode):
+        balance_stats = add_balance_fill_responses(
+            openai_client,
+            config,
+            turns,
+            [turn.segment for turn in turns],
+            generated_by_index,
+            responses_cache_path,
+            tts_root,
+            args.sample_rate,
+            args.tts_timeout,
+            args.tts_speed,
+            args.response_margin_sec,
+            args.target_right_ratio,
+            args.max_right_ratio,
+            args.long_turn_fill_sec,
+            args.fill_interval_sec,
+            args.fill_max_chars,
+            args.llm_timeout,
+        )
+    generated = [generated_by_index[index] for index in sorted(generated_by_index)]
     save_cached_responses(responses_cache_path, generated)
     with status(f"Writing stereo wav to [bold]{output_path}[/bold]"):
         stereo = build_stereo_audio(input_path, generated, args.sample_rate)
@@ -278,6 +330,11 @@ def process_one(
         "ttsUrl": config.ttsUrl,
         "ttsType": config.ttsType,
         "interactionMode": args.interaction_mode,
+        "balanceFillMode": args.balance_fill_mode,
+        "targetRightRatio": args.target_right_ratio,
+        "maxRightRatio": args.max_right_ratio,
+        "fillMaxChars": args.fill_max_chars,
+        "balanceStats": balance_stats,
         "transcript": [segment.__dict__ for segment in transcript],
         "responses": [response.__dict__ for response in generated],
         "cacheDir": str(cache_root),
