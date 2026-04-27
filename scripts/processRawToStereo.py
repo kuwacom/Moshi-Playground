@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torchaudio
 
+from datasetPaths import datasetCacheDir, datasetRawDir, datasetStereoDir
 from generateSoloConversationDataset import (
     GeneratedResponse,
     add_balance_fill_responses,
@@ -38,9 +39,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Process raw solo audio files sequentially into stereo Moshi training wavs"
     )
-    parser.add_argument("--input-dir", type=Path, default=Path("datasets/raw"))
-    parser.add_argument("--output-dir", type=Path, default=Path("datasets/stereo"))
-    parser.add_argument("--cache-dir", type=Path, default=Path("datasets/cache"))
+    parser.add_argument("--input-dir", type=Path, default=datasetRawDir())
+    parser.add_argument("--output-dir", type=Path, default=datasetStereoDir())
+    parser.add_argument("--cache-dir", type=Path, default=datasetCacheDir())
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument("--overwrite", action="store_true")

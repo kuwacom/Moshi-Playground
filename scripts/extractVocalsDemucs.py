@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from datasetPaths import datasetRawDir
 from progressUtils import console, create_progress, status
 
 
@@ -14,13 +15,13 @@ AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"}
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Extract vocal stems with Demucs and copy them into datasets/raw"
+        description="Extract vocal stems with Demucs and copy them into the active raw dataset"
     )
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("datasets/raw/demucsVocals"),
+        default=datasetRawDir() / "demucsVocals",
     )
     parser.add_argument(
         "--work-dir",

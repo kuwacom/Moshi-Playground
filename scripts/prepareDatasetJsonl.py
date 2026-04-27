@@ -7,6 +7,7 @@ from pathlib import Path
 
 import sphn
 
+from datasetPaths import datasetStereoDir, trainJsonlPath
 from progressUtils import console, create_progress, status
 
 
@@ -14,8 +15,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Create a Moshi dataset JSONL from stereo wav files"
     )
-    parser.add_argument("--audio-dir", type=Path, default=Path("datasets/stereo"))
-    parser.add_argument("--output", type=Path, default=Path("datasets/train.jsonl"))
+    parser.add_argument("--audio-dir", type=Path, default=datasetStereoDir())
+    parser.add_argument("--output", type=Path, default=trainJsonlPath())
     parser.add_argument("--pattern", default="*.wav")
     parser.add_argument("--require-transcript", action="store_true")
     return parser.parse_args()

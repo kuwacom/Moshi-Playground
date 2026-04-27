@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 from pathlib import Path
 
@@ -11,8 +12,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Copy the latest LoRA adapter to a stable path"
     )
-    parser.add_argument("--run-dir", type=Path, default=Path("loras/llmJpMoshiV1"))
-    parser.add_argument("--output-dir", type=Path, default=Path("loras/llmJpMoshiV1/latest"))
+    lora_name = os.environ.get("LORA_NAME", "shigureui1")
+    run_dir = Path(os.environ.get("RUN_DIR", str(Path("loras") / lora_name)))
+    latest_dir = Path(os.environ.get("LORA_LATEST_DIR", str(run_dir / "latest")))
+    parser.add_argument("--run-dir", type=Path, default=run_dir)
+    parser.add_argument("--output-dir", type=Path, default=latest_dir)
     return parser.parse_args()
 
 

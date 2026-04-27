@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from datasetPaths import trainJsonlPath
 from progressUtils import console, create_progress
 
 
@@ -16,7 +17,7 @@ def parse_args() -> argparse.Namespace:
             "*.responses.json metadata"
         )
     )
-    parser.add_argument("jsonl", type=Path, nargs="?", default=Path("datasets/train.jsonl"))
+    parser.add_argument("jsonl", type=Path, nargs="?", default=trainJsonlPath())
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--chunk-chars", type=int, default=8)
     return parser.parse_args()

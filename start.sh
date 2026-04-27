@@ -2,10 +2,11 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+source scripts/loadLoraEnv.sh
 
-run_dir="${RUN_DIR:-loras/llmJpMoshiV1}"
-latest_dir="${LORA_LATEST_DIR:-$run_dir/latest}"
-hf_repo="${HF_REPO:-llm-jp/llm-jp-moshi-v1}"
+run_dir="$RUN_DIR"
+latest_dir="$LORA_LATEST_DIR"
+hf_repo="$HF_REPO"
 
 if [ "${SKIP_EXPORT_LATEST:-0}" != "1" ]; then
   UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}" \
@@ -15,7 +16,7 @@ if [ "${SKIP_EXPORT_LATEST:-0}" != "1" ]; then
 fi
 
 lora_weight="${LORA_WEIGHT:-$latest_dir/lora.safetensors}"
-config_path="${CONFIG_PATH:-$latest_dir/config.json}"
+config_path="${MOSHI_CONFIG_PATH:-${CONFIG_PATH:-$latest_dir/config.json}}"
 
 if [ ! -f "$lora_weight" ]; then
   echo "LoRA weight not found: $lora_weight" >&2
@@ -30,6 +31,7 @@ if [ ! -f "$config_path" ]; then
 fi
 
 echo "Starting Moshi server"
+echo "  lora_name: $LORA_NAME"
 echo "  repo:   $hf_repo"
 echo "  lora:   $lora_weight"
 echo "  config: $config_path"

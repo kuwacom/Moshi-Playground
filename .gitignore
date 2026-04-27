@@ -1,11 +1,14 @@
 models/*
 datasets/**
 loras/*
+config/*
 __pycache__/
 *.pyc
 .env
 .env.*
 !.env.example
+!config/
+!config/*.example.yaml
 
 !models/.gitkeep
 !datasets/.gitkeep

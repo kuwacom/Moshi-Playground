@@ -1,6 +1,6 @@
 # data
 data:
-  train_data: "datasets/train.jsonl"
+  train_data: "datasets/shigureui1.jsonl"
   eval_data: ""
   shuffle: true
 
@@ -40,11 +40,11 @@ num_ckpt_keep: 5
 
 save_adapters: true
 param_dtype: "float16"
-run_dir: "loras/llmJpMoshiV1"
+run_dir: "loras/shigureui1"
 overwrite_run_dir: false
 
 # wandb:
 #   project: "moshi-lora"
-#   run_name: "llmJpMoshiV1"
+#   run_name: "shigureui1"
 #   key: ""
 #   offline: false

@@ -21,12 +21,11 @@ import whisper_timestamped as whisper
 from openai import OpenAI
 from openai import APIStatusError, OpenAIError
 
+from datasetPaths import datasetCacheDir
 from progressUtils import console, create_progress, status
 
 
-DEFAULT_OPENAI_BASE_URL = "https://litellm.kuwa.dev/v1"
 DEFAULT_OPENAI_MODEL = "anthropic/claude-sonnet-4.6"
-DEFAULT_TTS_URL = "https://api.kuwa.app/v1/capcut/synthesize"
 DEFAULT_TTS_TYPE = "10"
 BALANCE_FILL_INDEX_BASE = 10_000_000
 
@@ -135,7 +134,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-segment-sec", type=float, default=0.4)
     parser.add_argument("--max-segments", type=int)
     parser.add_argument("--keep-tts-dir", type=Path)
-    parser.add_argument("--cache-dir", type=Path, default=Path("datasets/cache"))
+    parser.add_argument("--cache-dir", type=Path, default=datasetCacheDir())
     parser.add_argument("--refresh-transcript", action="store_true")
     parser.add_argument("--refresh-responses", action="store_true")
     parser.add_argument("--tts-timeout", type=float, default=120.0)
@@ -165,17 +164,27 @@ def load_env_config(env_file: Path) -> EnvConfig:
         raise RuntimeError(
             "OPENAI_API_KEY is required. Copy .env.example to .env and set the key."
         )
+    openai_base_url = os.environ.get(
+        "OPENAI_BASE_URL",
+        os.environ.get("LITELLM_BASE_URL", ""),
+    ).strip()
+    if not openai_base_url:
+        raise RuntimeError(
+            "OPENAI_BASE_URL is required. Copy .env.example to .env and set the API base URL."
+        )
+    tts_url = os.environ.get("KUWA_TTS_URL", "").strip()
+    if not tts_url:
+        raise RuntimeError(
+            "KUWA_TTS_URL is required. Copy .env.example to .env and set the TTS URL."
+        )
     return EnvConfig(
-        openaiBaseUrl=os.environ.get(
-            "OPENAI_BASE_URL",
-            os.environ.get("LITELLM_BASE_URL", DEFAULT_OPENAI_BASE_URL),
-        ).rstrip("/"),
+        openaiBaseUrl=openai_base_url.rstrip("/"),
         openaiApiKey=api_key,
         openaiModel=os.environ.get(
             "OPENAI_MODEL",
             os.environ.get("LITELLM_MODEL", DEFAULT_OPENAI_MODEL),
         ),
-        ttsUrl=os.environ.get("KUWA_TTS_URL", DEFAULT_TTS_URL),
+        ttsUrl=tts_url.rstrip("/"),
         ttsType=os.environ.get("KUWA_TTS_TYPE", DEFAULT_TTS_TYPE),
     )
 

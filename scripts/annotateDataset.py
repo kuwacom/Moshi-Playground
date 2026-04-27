@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from datasetPaths import trainJsonlPath
 from progressUtils import console, status
 
 
@@ -18,7 +19,7 @@ def parse_args() -> argparse.Namespace:
         "jsonl",
         type=Path,
         nargs="?",
-        default=Path("datasets/train.jsonl"),
+        default=trainJsonlPath(),
     )
     parser.add_argument("--lang", default="ja")
     parser.add_argument("--whisper-model", default="large-v3")

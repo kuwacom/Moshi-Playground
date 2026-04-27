@@ -18,7 +18,7 @@
 - [5. 完全自動でデータセットを作る](#5-完全自動でデータセットを作る)
 - [6. 手動処理と各ツール](#6-手動処理と各ツール)
 - [7. JSONL と学習用 transcript](#7-jsonl-と学習用-transcript)
-- [8. 学習](#8-学習)
+- [8. 学習と config 生成](#8-学習と-config-生成)
 - [9. 推論確認](#9-推論確認)
 - [10. 困った時](#10-困った時)
 
@@ -65,28 +65,28 @@ raw音声
   ↓
 一人配信なら Whisper + OpenAI互換API + TTS で右ch補完
   ↓
-datasets/stereo/*.wav
+datasets/stereo/${LORA_NAME}/*.wav
   ↓
-datasets/train.jsonl
+datasets/${LORA_NAME}.jsonl
   ↓
 annotateDataset.py で学習用 transcript json 生成
   ↓
 LoRA 学習
   ↓
-loras/llmJpMoshiV1/latest/
+loras/${LORA_NAME}/latest/
 ```
 
 主な保存先:
 
-| パス | 用途 |
-|---|---|
-| `models/` | Hugging Face モデル、Whisper モデル、キャッシュ |
-| `datasets/raw/` | 元音声、UVR5 などで切り抜いた声素材 |
-| `datasets/cache/` | Whisper / LLM / TTS の途中結果 |
-| `datasets/tts/` | 手動TTSや確認用TTS |
-| `datasets/stereo/` | 学習に使う2ch音声 |
-| `datasets/train.jsonl` | 学習対象wav一覧 |
-| `loras/` | 学習結果とLoRAアダプター |
+| パス                            | 用途                                            |
+| ------------------------------- | ----------------------------------------------- |
+| `models/`                       | Hugging Face モデル、Whisper モデル、キャッシュ |
+| `datasets/raw/${LORA_NAME}/`    | 元音声、UVR5 などで切り抜いた声素材             |
+| `datasets/cache/${LORA_NAME}/`  | Whisper / LLM / TTS の途中結果                  |
+| `datasets/tts/${LORA_NAME}/`    | 手動TTSや確認用TTS                              |
+| `datasets/stereo/${LORA_NAME}/` | 学習に使う2ch音声                               |
+| `datasets/${LORA_NAME}.jsonl`   | 学習対象wav一覧                                 |
+| `loras/`                        | 学習結果とLoRAアダプター                        |
 
 補助ツールは `rich` で、処理中ファイル、完了数、経過時間、残り時間の目安を表示します。長い処理では、必ず `--dry-run` や `--limit` で小さく試してから本番処理してください。
 
@@ -129,7 +129,7 @@ HF_HOME="$PWD/models/huggingface" \
 uv run --project moshi-finetune python scripts/downloadModel.py
 ```
 
-学習設定では `config/llmJpMoshiLora.yaml` の `hf_repo_id` に `llm-jp/llm-jp-moshi-v1` を指定しています。
+学習設定の雛形は `config/llmJpMoshiLora.example.yaml` です。`train-run.sh` が `.env` の `LORA_NAME` から `config/${LORA_NAME}.yaml` を生成し、`hf_repo_id` に `llm-jp/llm-jp-moshi-v1` を指定します。
 
 `models/llm-jp-moshi-v1/` のような直接コピーは学習には不要です。`--local-dir` を明示した場合だけ作成してください。
 
@@ -146,10 +146,22 @@ cp .env.example .env
 `.env`:
 
 ```dotenv
-OPENAI_BASE_URL=https://litellm.kuwa.dev/v1
+LORA_NAME=example-lora
+DATASET_ROOT=datasets
+DATASET_RAW_DIR=${DATASET_ROOT}/raw/${LORA_NAME}
+DATASET_STEREO_DIR=${DATASET_ROOT}/stereo/${LORA_NAME}
+DATASET_CACHE_DIR=${DATASET_ROOT}/cache/${LORA_NAME}
+DATASET_TTS_DIR=${DATASET_ROOT}/tts/${LORA_NAME}
+TRAIN_JSONL=${DATASET_ROOT}/${LORA_NAME}.jsonl
+RUN_DIR=loras/${LORA_NAME}
+LORA_LATEST_DIR=${RUN_DIR}/latest
+TRAIN_CONFIG_TEMPLATE_PATH=config/llmJpMoshiLora.example.yaml
+TRAIN_CONFIG_PATH=config/${LORA_NAME}.yaml
+
+OPENAI_BASE_URL=
 OPENAI_API_KEY=ここにAPIキー
 OPENAI_MODEL=anthropic/claude-sonnet-4.6
-KUWA_TTS_URL=https://api.kuwa.app/v1/capcut/synthesize
+KUWA_TTS_URL=
 KUWA_TTS_TYPE=10
 ```
 
@@ -168,7 +180,7 @@ for line in Path(".env").read_text(encoding="utf-8").splitlines():
 
 client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"],
-    base_url=os.environ.get("OPENAI_BASE_URL", "https://litellm.kuwa.dev/v1"),
+    base_url=os.environ["OPENAI_BASE_URL"],
 )
 res = client.chat.completions.create(
     model=os.environ.get("OPENAI_MODEL", "anthropic/claude-sonnet-4.6"),
@@ -179,23 +191,41 @@ print(res.choices[0].message.content)
 PY
 ```
 
+### shell script での使われ方
+
+`prepare-dataset.sh`、`train-run.sh`、`start.sh` は共通で `scripts/loadLoraEnv.sh` を `source` します。  
+ここで `.env` を読み込み、未指定のパスを `LORA_NAME` から補完します。
+
+例えば `LORA_NAME=example-lora` の時、未指定の値は以下のように解決されます。
+
+```text
+DATASET_RAW_DIR=datasets/raw/example-lora
+DATASET_STEREO_DIR=datasets/stereo/example-lora
+DATASET_CACHE_DIR=datasets/cache/example-lora
+TRAIN_JSONL=datasets/example-lora.jsonl
+RUN_DIR=loras/example-lora
+TRAIN_CONFIG_PATH=config/example-lora.yaml
+```
+
+つまり `.env` で `LORA_NAME` を切り替えると、dataset、jsonl、学習出力先、推論対象がまとめて切り替わります。
+
 ---
 
 ## 4. 音声素材の用意
 
 ### 基本方針
 
-音声の切り抜きやボーカル抽出は、PC 側で UVR5 などの専用ツールを使う運用がおすすめです。声だけになったファイルを `datasets/raw/` に入れてください。耳で確認しながら不要区間を削れるため、学習データの品質を上げやすいです。
+音声の切り抜きやボーカル抽出は、PC 側で UVR5 などの専用ツールを使う運用がおすすめです。声だけになったファイルを `datasets/raw/${LORA_NAME}/` に入れてください。耳で確認しながら不要区間を削れるため、学習データの品質を上げやすいです。
 
 おすすめの素材:
 
-| 観点 | 内容 |
-|---|---|
-| 話し方 | 目的の話者が自然に話している |
-| 音質 | マイク音質、音量、部屋鳴りがある程度そろっている |
-| ノイズ | BGM、効果音、ゲーム音、通知音が小さい |
-| 会話性 | 相槌、笑い、言い淀み、聞き返しが自然に含まれる |
-| 内容 | 学習後に使いたい話題や口調に近い |
+| 観点   | 内容                                             |
+| ------ | ------------------------------------------------ |
+| 話し方 | 目的の話者が自然に話している                     |
+| 音質   | マイク音質、音量、部屋鳴りがある程度そろっている |
+| ノイズ | BGM、効果音、ゲーム音、通知音が小さい            |
+| 会話性 | 相槌、笑い、言い淀み、聞き返しが自然に含まれる   |
+| 内容   | 学習後に使いたい話題や口調に近い                 |
 
 避けたい素材:
 
@@ -207,12 +237,12 @@ PY
 
 データ量の目安:
 
-| 目的 | 目安 |
-|---|---:|
-| 動作確認 | 3〜10分 |
-| 声や口調の軽い確認 | 30分〜2時間 |
-| ある程度安定した LoRA | 5〜20時間 |
-| 口調や反応まで寄せる | 20時間以上 |
+| 目的                  |        目安 |
+| --------------------- | ----------: |
+| 動作確認              |     3〜10分 |
+| 声や口調の軽い確認    | 30分〜2時間 |
+| ある程度安定した LoRA |   5〜20時間 |
+| 口調や反応まで寄せる  |  20時間以上 |
 
 量より品質が大事です。小さいけれどきれいなデータセットは、大きいけれど荒れたデータセットより安定しやすいです。
 
@@ -220,10 +250,10 @@ PY
 
 `moshi-finetune` はステレオ wav を前提にしています。
 
-| チャンネル | 内容 |
-|---|---|
-| 左ch | Moshi に学習させたい側の音声 |
-| 右ch | ユーザー、聞き手、会話相手側の音声 |
+| チャンネル | 内容                               |
+| ---------- | ---------------------------------- |
+| 左ch       | Moshi に学習させたい側の音声       |
+| 右ch       | ユーザー、聞き手、会話相手側の音声 |
 
 一人配信では、左に元配信者音声、右に LLM + TTS で作った相槌や質問を入れます。コラボや通話音声では、話者分離して学習したい声を左、それ以外を右に寄せます。左右は途中で入れ替えないでください。
 
@@ -250,16 +280,16 @@ PY
 
 ## 5. 完全自動でデータセットを作る
 
-ここでは、`datasets/raw/` に置いた一人配信音声から、学習に使う `datasets/train.jsonl` と transcript まで一気に作る流れを説明します。まずはこの方法で全体を通し、音質や応答が気になる場合だけ次の「手動処理と各ツール」で細かく調整してください。
+ここでは、`datasets/raw/${LORA_NAME}/` に置いた一人配信音声から、学習に使う `datasets/${LORA_NAME}.jsonl` と transcript まで一気に作る流れを説明します。最初はこの流れで通し、気になるところだけ次の「手動処理と各ツール」で切り分けるのがおすすめです。
 
 ### 1. raw 音声を置く
 
-PC 側で UVR5 などを使って声だけに近い状態へ切り抜いた wav を、`datasets/raw/` に入れます。
+PC 側で UVR5 などを使って声だけに近い状態へ切り抜いた wav を、`datasets/raw/${LORA_NAME}/` に入れます。
 
 ```text
-datasets/raw/source001.wav
-datasets/raw/source002.wav
-datasets/raw/source003.wav
+datasets/raw/${LORA_NAME}/source001.wav
+datasets/raw/${LORA_NAME}/source002.wav
+datasets/raw/${LORA_NAME}/source003.wav
 ```
 
 ### 2. 対象ファイルを確認する
@@ -285,14 +315,14 @@ uv run --project moshi-finetune python scripts/processRawToStereo.py \
 
 確認する場所:
 
-| パス | 見ること |
-|---|---|
-| `datasets/stereo/` | 生成された2ch wav |
-| `datasets/cache/<音声ファイル名>/transcript.json` | Whisper の文字起こし |
-| `datasets/cache/<音声ファイル名>/responses.json` | LLM 応答と配置タイミング |
-| `datasets/cache/<音声ファイル名>/tts/` | 速度調整後の TTS 音声 |
+| パス                                                           | 見ること                 |
+| -------------------------------------------------------------- | ------------------------ |
+| `datasets/stereo/${LORA_NAME}/`                                | 生成された2ch wav        |
+| `datasets/cache/${LORA_NAME}/<音声ファイル名>/transcript.json` | Whisper の文字起こし     |
+| `datasets/cache/${LORA_NAME}/<音声ファイル名>/responses.json`  | LLM 応答と配置タイミング |
+| `datasets/cache/${LORA_NAME}/<音声ファイル名>/tts/`            | 速度調整後の TTS 音声    |
 
-### 4. 問題なければ本番変換する
+### 4. 問題なければ一括実行する
 
 データセット準備をまとめて実行する場合:
 
@@ -302,19 +332,31 @@ bash prepare-dataset.sh
 
 `prepare-dataset.sh` は以下を順番に実行します。
 
-| 処理 | 内容 |
-|---|---|
-| `processRawToStereo.py` | raw音声をstereo学習音声へ変換 |
-| `prepareDatasetJsonl.py` | `datasets/stereo/` から `datasets/train.jsonl` を生成 |
-| `annotateDataset.py` | Whisper large-v3 で学習用 transcript json を生成 |
+| 処理                     | 内容                                                                      |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `processRawToStereo.py`  | raw音声をstereo学習音声へ変換                                             |
+| `prepareDatasetJsonl.py` | `datasets/stereo/${LORA_NAME}/` から `datasets/${LORA_NAME}.jsonl` を生成 |
+| `annotateDataset.py`     | Whisper large-v3 で学習用 transcript json を生成                          |
 
-各ステップを個別に調整したい場合は、以下のように手動で実行します。
+ここまで終わると、学習前の準備として必要な `stereo wav`、`jsonl`、`transcript json` が揃います。次はそのまま `bash train-run.sh` で学習に進めます。
+
+### 5. 学習まで一気に進める
 
 ```bash
-uv run --project moshi-finetune python scripts/processRawToStereo.py
+bash train-run.sh
 ```
 
-`datasets/raw/` の wav をファイル名順に処理し、`datasets/stereo/` へ stereo wav を出力します。途中で失敗しても `datasets/cache/` に途中結果が残るため、再実行時は保存済みの Whisper / LLM / TTS 結果を再利用します。
+`train-run.sh` は次の順で動きます。
+
+1. `datasets/stereo/${LORA_NAME}/` から `datasets/${LORA_NAME}.jsonl` を作り直す
+2. transcript json が揃っているか確認する
+3. `config/llmJpMoshiLora.example.yaml` から `config/${LORA_NAME}.yaml` を生成する
+4. 既存の `RUN_DIR` があれば `*.previous.YYYYMMDD-HHMMSS` に退避する
+5. `torchrun` で LoRA 学習を始める
+
+### 6. 途中保存と再開
+
+`datasets/raw/${LORA_NAME}/` の wav をファイル名順に処理し、`datasets/stereo/${LORA_NAME}/` へ stereo wav を出力します。途中で失敗しても `datasets/cache/${LORA_NAME}/` に途中結果が残るため、再実行時は保存済みの Whisper / LLM / TTS 結果を再利用します。
 
 失敗したファイルを飛ばして続けたい場合:
 
@@ -323,15 +365,15 @@ uv run --project moshi-finetune python scripts/processRawToStereo.py \
   --continue-on-error
 ```
 
-### 5. JSONL と transcript を作る
+### 7. JSONL と transcript を個別に作る
 
 ```bash
 uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
-  --audio-dir datasets/stereo \
-  --output datasets/train.jsonl
+  --audio-dir "$DATASET_STEREO_DIR" \
+  --output "$TRAIN_JSONL"
 
 uv run --project moshi-finetune python scripts/annotateDataset.py \
-  datasets/train.jsonl \
+  "$TRAIN_JSONL" \
   --lang ja \
   --whisper-model large-v3 \
   --whisper-cache-dir models/whisper
@@ -341,17 +383,15 @@ uv run --project moshi-finetune python scripts/annotateDataset.py \
 
 ```bash
 uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
-  --audio-dir datasets/stereo \
-  --output datasets/train.jsonl \
+  --audio-dir "$DATASET_STEREO_DIR" \
+  --output "$TRAIN_JSONL" \
   --require-transcript
 ```
 
-### 途中保存と再開
-
-途中結果は `datasets/cache/<音声ファイル名>/` に保存されます。
+途中結果は `datasets/cache/${LORA_NAME}/<音声ファイル名>/` に保存されます。
 
 ```text
-datasets/cache/solo001/
+datasets/cache/${LORA_NAME}/solo001/
   transcript.json        # Whisper の文字起こし結果
   responses.json         # LLM 応答と配置タイミング
   tts/
@@ -362,33 +402,34 @@ datasets/cache/solo001/
 
 Whisper は特に時間がかかるため、通常は `--refresh-transcript` を付けずに再実行してください。LLM 応答や TTS だけ作り直したい場合は `--refresh-responses` を使います。
 
-`--max-segments` は処理対象を一時的に絞るだけで、`transcript.json` には全体の Whisper 結果を保存します。短い試作のあと、本番実行で Whisper をやり直す必要はありません。
+`--max-segments` は処理対象を一時的に絞るだけで、`transcript.json` には全体の Whisper 結果を保存します。  
+短い試作のあと、本番実行で Whisper をやり直す必要はありません。
 
 ### 応答生成の考え方
 
 Whisper の発話間隔と発話内容を見て、右チャンネルへ入れる音声を自動で切り替えます。元音声のフィラー、息継ぎ、笑い、短い間は削りません。左チャンネルの時間軸も動かさず、右チャンネルの挿入位置だけを調整します。
 
-| 状況 | 挙動 |
-|---|---|
-| 発話間隔が `--merge-gap-sec` 以下 | 複数発話をまとめて1つの返答を生成 |
-| コメントに答えているような発話で、直前に十分な間がある | 発話の手前に「質問コメント」を生成 |
-| 独立した説明や雑談に見える発話 | 発話の後ろに「返事」を生成 |
-| 次の発話までが短い | 短い相槌寄りに文字数を制限 |
-| 次の発話まで余裕がある | しっかり返答 |
-| 左chの長い発話で右ch比率が足りない | 発話の途中に短い相槌を追加 |
-| TTS音声 | デフォルトでピッチを変えずに `1.2` 倍速 |
+| 状況                                                   | 挙動                                    |
+| ------------------------------------------------------ | --------------------------------------- |
+| 発話間隔が `--merge-gap-sec` 以下                      | 複数発話をまとめて1つの返答を生成       |
+| コメントに答えているような発話で、直前に十分な間がある | 発話の手前に「質問コメント」を生成      |
+| 独立した説明や雑談に見える発話                         | 発話の後ろに「返事」を生成              |
+| 次の発話までが短い                                     | 短い相槌寄りに文字数を制限              |
+| 次の発話まで余裕がある                                 | しっかり返答                            |
+| 左chの長い発話で右ch比率が足りない                     | 発話の途中に短い相槌を追加              |
+| TTS音声                                                | デフォルトでピッチを変えずに `1.2` 倍速 |
 
 `--interaction-mode auto` が既定です。配信者が明らかにコメントへ返しているような場面だけ `pre_question` を選び、それ以外は `reply` として扱います。
 
 モードを固定したい場合:
 
-| モード | 挙動 |
-|---|---|
-| `--interaction-mode auto` | 手前質問コメントと返事を自動選択。手前に自然に置けない場合は返事へフォールバック |
-| `--interaction-mode pre-question` | 手前質問コメントだけ生成。自然に置けない発話はスキップ |
-| `--interaction-mode reply` | 発話後の返事だけ生成 |
+| モード                            | 挙動                                                                             |
+| --------------------------------- | -------------------------------------------------------------------------------- |
+| `--interaction-mode auto`         | 手前質問コメントと返事を自動選択。手前に自然に置けない場合は返事へフォールバック |
+| `--interaction-mode pre-question` | 手前質問コメントだけ生成。自然に置けない発話はスキップ                           |
+| `--interaction-mode reply`        | 発話後の返事だけ生成                                                             |
 
-既に `datasets/cache/<音声名>/responses.json` がある場合はキャッシュが優先されます。ただし、現在のモードと違う種類のキャッシュは再利用しません。モードを変えて全体を作り直したい時は `--refresh-responses` を付けてください。
+既に `datasets/cache/${LORA_NAME}/<音声名>/responses.json` がある場合はキャッシュが優先されます。ただし、現在のモードと違う種類のキャッシュは再利用しません。モードを変えて全体を作り直したい時は `--refresh-responses` を付けてください。
 
 ### 左右の発話量バランス
 
@@ -404,35 +445,35 @@ rightRatio = 右ch発話秒数 / (左ch発話秒数 + 右ch発話秒数)
 
 主なオプション:
 
-| オプション | 既定値 | 用途 |
-|---|---:|---|
-| `--input-dir` | `datasets/raw` | 入力音声フォルダ |
-| `--output-dir` | `datasets/stereo` | ステレオ wav 出力先 |
-| `--cache-dir` | `datasets/cache` | Whisper/LLM/TTS の途中結果 |
-| `--dry-run` | なし | 対象ファイル一覧だけ表示 |
-| `--limit` | なし | 先頭 N ファイルだけ処理 |
-| `--max-segments` | なし | 各音声の先頭 N 発話だけ処理 |
-| `--merge-gap-sec` | `0.8` | 近い発話をまとめる秒数 |
-| `--interaction-mode` | `auto` | `auto` / `reply` / `pre-question` を選択 |
-| `--min-insert-gap-sec` | `0.8` | 返事を自然に置ける最小の発話間隔 |
-| `--pre-question-gap-sec` | `1.6` | 手前質問コメントを検討する最小の直前間隔 |
-| `--short-gap-sec` | `2.0` | 次発話までが短いと判断する秒数 |
-| `--long-gap-sec` | `5.0` | しっかり返答できると判断する秒数 |
-| `--min-response-chars` | `12` | 短い相槌の最小文字数 |
-| `--max-response-chars` | `48` | 返答の最大文字数 |
-| `--response-delay-sec` | `0.35` | 発話終了から応答開始までの待ち時間 |
-| `--response-margin-sec` | `0.25` | 次発話にかぶらないための余白 |
-| `--tts-chars-per-sec` | `8.0` | 返答文字数を決めるための読み上げ速度目安 |
-| `--tts-speed` | `1.2` | ピッチ維持の速度変更。`1.0` で無効 |
-| `--balance-fill-mode` | `auto` | `auto` は `interaction-mode auto` の時だけ比率補完。`always` で常時、`off` で無効 |
-| `--target-right-ratio` | `0.4` | 目標の右ch発話比率 |
-| `--max-right-ratio` | `0.5` | 右chを増やしすぎない上限 |
-| `--long-turn-fill-sec` | `12.0` | この秒数以上の左ch発話を途中補完の対象にする |
-| `--fill-interval-sec` | `6.0` | 長い左ch発話の中で相槌候補を置く間隔 |
-| `--fill-max-chars` | `14` | 比率補完で挿入する短い発話の最大文字数 |
-| `--refresh-transcript` | なし | Whisper 結果を作り直す |
-| `--refresh-responses` | なし | LLM/TTS 結果を作り直す |
-| `--continue-on-error` | なし | 1ファイル失敗しても次へ進む |
+| オプション               |            既定値 | 用途                                                                              |
+| ------------------------ | ----------------: | --------------------------------------------------------------------------------- |
+| `--input-dir`            |    `datasets/raw` | 入力音声フォルダ                                                                  |
+| `--output-dir`           | `datasets/stereo` | ステレオ wav 出力先                                                               |
+| `--cache-dir`            |  `datasets/cache` | Whisper/LLM/TTS の途中結果                                                        |
+| `--dry-run`              |              なし | 対象ファイル一覧だけ表示                                                          |
+| `--limit`                |              なし | 先頭 N ファイルだけ処理                                                           |
+| `--max-segments`         |              なし | 各音声の先頭 N 発話だけ処理                                                       |
+| `--merge-gap-sec`        |             `0.8` | 近い発話をまとめる秒数                                                            |
+| `--interaction-mode`     |            `auto` | `auto` / `reply` / `pre-question` を選択                                          |
+| `--min-insert-gap-sec`   |             `0.8` | 返事を自然に置ける最小の発話間隔                                                  |
+| `--pre-question-gap-sec` |             `1.6` | 手前質問コメントを検討する最小の直前間隔                                          |
+| `--short-gap-sec`        |             `2.0` | 次発話までが短いと判断する秒数                                                    |
+| `--long-gap-sec`         |             `5.0` | しっかり返答できると判断する秒数                                                  |
+| `--min-response-chars`   |              `12` | 短い相槌の最小文字数                                                              |
+| `--max-response-chars`   |              `48` | 返答の最大文字数                                                                  |
+| `--response-delay-sec`   |            `0.35` | 発話終了から応答開始までの待ち時間                                                |
+| `--response-margin-sec`  |            `0.25` | 次発話にかぶらないための余白                                                      |
+| `--tts-chars-per-sec`    |             `8.0` | 返答文字数を決めるための読み上げ速度目安                                          |
+| `--tts-speed`            |             `1.2` | ピッチ維持の速度変更。`1.0` で無効                                                |
+| `--balance-fill-mode`    |            `auto` | `auto` は `interaction-mode auto` の時だけ比率補完。`always` で常時、`off` で無効 |
+| `--target-right-ratio`   |             `0.4` | 目標の右ch発話比率                                                                |
+| `--max-right-ratio`      |             `0.5` | 右chを増やしすぎない上限                                                          |
+| `--long-turn-fill-sec`   |            `12.0` | この秒数以上の左ch発話を途中補完の対象にする                                      |
+| `--fill-interval-sec`    |             `6.0` | 長い左ch発話の中で相槌候補を置く間隔                                              |
+| `--fill-max-chars`       |              `14` | 比率補完で挿入する短い発話の最大文字数                                            |
+| `--refresh-transcript`   |              なし | Whisper 結果を作り直す                                                            |
+| `--refresh-responses`    |              なし | LLM/TTS 結果を作り直す                                                            |
+| `--continue-on-error`    |              なし | 1ファイル失敗しても次へ進む                                                       |
 
 ---
 
@@ -442,23 +483,33 @@ rightRatio = 右ch発話秒数 / (左ch発話秒数 + 右ch発話秒数)
 
 ツール早見表:
 
-| ツール | 使う場面 |
-|---|---|
-| `processRawToStereo.py` | raw フォルダを一括で stereo 化したい |
-| `generateSoloConversationDataset.py` | 1本だけ一人配信を stereo 化して細かく確認したい |
-| `trimSilence.py` | 長い無音だけを削りたい |
-| `extractVocalsDemucs.py` | サーバ上で簡易的に声を抽出したい |
-| `synthesizeTts.py` | TTS API だけ単体で試したい |
-| `makeStereoPair.py` | 既にある左右音声を stereo wav にしたい |
-| `prepareDatasetJsonl.py` | `datasets/stereo/` から `train.jsonl` を作りたい |
-| `annotateDataset.py` | ローカル Whisper で学習用 transcript を作りたい |
+| ツール                               | 使う場面                                                                      |
+| ------------------------------------ | ----------------------------------------------------------------------------- |
+| `processRawToStereo.py`              | raw フォルダを一括で stereo 化したい                                          |
+| `generateSoloConversationDataset.py` | 1本だけ一人配信を stereo 化して細かく確認したい                               |
+| `trimSilence.py`                     | 長い無音だけを削りたい                                                        |
+| `extractVocalsDemucs.py`             | サーバ上で簡易的に声を抽出したい                                              |
+| `synthesizeTts.py`                   | TTS API だけ単体で試したい                                                    |
+| `makeStereoPair.py`                  | 既にある左右音声を stereo wav にしたい                                        |
+| `prepareDatasetJsonl.py`             | `datasets/stereo/${LORA_NAME}/` から `datasets/${LORA_NAME}.jsonl` を作りたい |
+| `annotateDataset.py`                 | ローカル Whisper で学習用 transcript を作りたい                               |
 
 ### 手動で1本ずつ作る
 
-#### 1. 元音声を `datasets/raw/` に置く
+ここでの流れは次の順です。
+
+1. 元音声を 1 本だけ置く
+2. 必要なら無音やノイズを整える
+3. 1 本だけ stereo 化して内容を確認する
+4. TTS や左右配置を必要に応じて単体確認する
+5. 問題ない wav だけを `datasets/stereo/${LORA_NAME}/` に残す
+6. `jsonl` と transcript を作る
+7. 最後に `bash train-run.sh` で学習する
+
+#### 1. 元音声を `datasets/raw/${LORA_NAME}/` に置く
 
 ```text
-datasets/raw/source001.wav
+datasets/raw/${LORA_NAME}/source001.wav
 ```
 
 まずは 1 本だけ置いて、音量、ノイズ、BGM、不要な無音を耳で確認します。PC 側で UVR5 を使って声だけにした音声がある場合は、その出力をここへ入れます。
@@ -467,14 +518,15 @@ datasets/raw/source001.wav
 
 ```bash
 uv run --project moshi-finetune python scripts/trimSilence.py \
-  --input datasets/raw/source001.wav \
-  --output datasets/raw/trimmed/source001.wav \
+  --input datasets/raw/${LORA_NAME}/source001.wav \
+  --output datasets/raw/${LORA_NAME}/trimmed/source001.wav \
   --threshold-db -45 \
   --min-silence-sec 0.8 \
   --keep-silence-sec 0.25
 ```
 
-無音を詰めすぎると会話の自然な間が消えます。まずは既定値に近い設定で出力を聞き、待機時間だけが削れているか確認してください。
+無音を詰めすぎると会話の自然な間が消えます。  
+まずは既定値に近い設定で出力を聞き、待機時間だけが削れているか確認してください。
 
 #### 3. 一人配信から1本だけ stereo を作る
 
@@ -482,24 +534,24 @@ uv run --project moshi-finetune python scripts/trimSilence.py \
 
 ```bash
 uv run --project moshi-finetune python scripts/generateSoloConversationDataset.py \
-  --input datasets/raw/trimmed/source001.wav \
-  --output datasets/stereo/source001.wav \
-  --metadata-output datasets/stereo/source001.responses.json \
+  --input datasets/raw/${LORA_NAME}/trimmed/source001.wav \
+  --output datasets/stereo/${LORA_NAME}/source001.wav \
+  --metadata-output datasets/stereo/${LORA_NAME}/source001.responses.json \
   --max-segments 10 \
   --tts-speed 1.2
 ```
 
 確認ポイント:
 
-| 見る場所 | 確認すること |
-|---|---|
-| `datasets/stereo/source001.wav` | 左右の音が自然に並んでいるか |
-| `datasets/stereo/source001.responses.json` | どの発話にどんな応答が付いたか |
-| `datasets/cache/source001/transcript.json` | Whisper の文字起こしが大きく崩れていないか |
-| `datasets/cache/source001/responses.json` | LLM 応答の長さや内容が合っているか |
-| `datasets/cache/source001/tts/` | 生成された TTS 音声が破綻していないか |
+| 見る場所                                                | 確認すること                               |
+| ------------------------------------------------------- | ------------------------------------------ |
+| `datasets/stereo/${LORA_NAME}/source001.wav`            | 左右の音が自然に並んでいるか               |
+| `datasets/stereo/${LORA_NAME}/source001.responses.json` | どの発話にどんな応答が付いたか             |
+| `datasets/cache/${LORA_NAME}/source001/transcript.json` | Whisper の文字起こしが大きく崩れていないか |
+| `datasets/cache/${LORA_NAME}/source001/responses.json`  | LLM 応答の長さや内容が合っているか         |
+| `datasets/cache/${LORA_NAME}/source001/tts/`            | 生成された TTS 音声が破綻していないか      |
 
-`--max-segments 10` は試作用です。問題なければ外して同じコマンドを再実行します。Whisper 結果は `datasets/cache/` に残るため、通常は最初からやり直しにはなりません。
+`--max-segments 10` は試作用です。問題なければ外して同じコマンドを再実行します。Whisper 結果は `datasets/cache/${LORA_NAME}/` に残るため、通常は最初からやり直しにはなりません。
 
 #### 4. TTS だけ単体で確認する
 
@@ -509,7 +561,7 @@ TTS API の音色や速度を先に確認したい場合:
 uv run --project moshi-finetune python scripts/synthesizeTts.py \
   "そうなんですね、もう少し聞かせてください" \
   --type 10 \
-  --output datasets/tts/check001.wav
+  --output datasets/tts/${LORA_NAME}/check001.wav
 ```
 
 この単体スクリプトは速度変更をしません。学習用の一人配信補完では `generateSoloConversationDataset.py` と `processRawToStereo.py` の `--tts-speed` で、ピッチを変えずに速度調整します。
@@ -520,29 +572,29 @@ uv run --project moshi-finetune python scripts/synthesizeTts.py \
 
 ```bash
 uv run --project moshi-finetune python scripts/makeStereoPair.py \
-  --left datasets/raw/leftSpeaker.wav \
-  --right datasets/raw/rightSpeaker.wav \
-  --output datasets/stereo/manual001.wav
+  --left datasets/raw/${LORA_NAME}/leftSpeaker.wav \
+  --right datasets/raw/${LORA_NAME}/rightSpeaker.wav \
+  --output datasets/stereo/${LORA_NAME}/manual001.wav
 ```
 
 `makeStereoPair.py` は左右を 24kHz にそろえ、短い方を無音で埋めて同じ長さにします。左右の開始タイミングがずれている場合は、事前に DAW や音声編集ソフトで合わせてから使ってください。
 
 #### 6. 良いものだけ JSONL に入れる
 
-単体確認で問題ない wav だけを `datasets/stereo/` に残してから、JSONL を作ります。
+単体確認で問題ない wav だけを `datasets/stereo/${LORA_NAME}/` に残してから、JSONL を作ります。
 
 ```bash
 uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
-  --audio-dir datasets/stereo \
-  --output datasets/train.jsonl
+  --audio-dir datasets/stereo/${LORA_NAME} \
+  --output datasets/${LORA_NAME}.jsonl
 ```
 
 学習用 transcript まで作ったあとに欠けがないか確認する場合:
 
 ```bash
 uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
-  --audio-dir datasets/stereo \
-  --output datasets/train.jsonl \
+  --audio-dir datasets/stereo/${LORA_NAME} \
+  --output datasets/${LORA_NAME}.jsonl \
   --require-transcript
 ```
 
@@ -552,25 +604,25 @@ uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
 
 ```bash
 uv run --project moshi-finetune python scripts/trimSilence.py \
-  --input datasets/raw/source001.wav \
-  --output datasets/raw/trimmed/source001.wav
+  --input datasets/raw/${LORA_NAME}/source001.wav \
+  --output datasets/raw/${LORA_NAME}/trimmed/source001.wav
 ```
 
 フォルダ一括:
 
 ```bash
 uv run --project moshi-finetune python scripts/trimSilence.py \
-  --input datasets/raw/demucsVocals \
-  --output datasets/raw/trimmed \
+  --input datasets/raw/${LORA_NAME}/demucsVocals \
+  --output datasets/raw/${LORA_NAME}/trimmed \
   --recursive
 ```
 
-| オプション | 目安 | 意味 |
-|---|---:|---|
-| `--threshold-db` | `-45` | これより小さい音を無音扱い |
-| `--min-silence-sec` | `0.8` | この秒数以上の無音だけ削る |
-| `--keep-silence-sec` | `0.25` | 削った前後に残す余白 |
-| `--min-voice-sec` | `0.15` | 短すぎるノイズを発話扱いしない |
+| オプション           |   目安 | 意味                           |
+| -------------------- | -----: | ------------------------------ |
+| `--threshold-db`     |  `-45` | これより小さい音を無音扱い     |
+| `--min-silence-sec`  |  `0.8` | この秒数以上の無音だけ削る     |
+| `--keep-silence-sec` | `0.25` | 削った前後に残す余白           |
+| `--min-voice-sec`    | `0.15` | 短すぎるノイズを発話扱いしない |
 
 ### Demucs で声を抽出する
 
@@ -578,31 +630,31 @@ uv run --project moshi-finetune python scripts/trimSilence.py \
 
 ```bash
 uv run --project moshi-finetune --with demucs python scripts/extractVocalsDemucs.py \
-  --input datasets/raw/source001.wav \
-  --output-dir datasets/raw/demucsVocals
+  --input datasets/raw/${LORA_NAME}/source001.wav \
+  --output-dir datasets/raw/${LORA_NAME}/demucsVocals
 ```
 
 フォルダ一括:
 
 ```bash
 uv run --project moshi-finetune --with demucs python scripts/extractVocalsDemucs.py \
-  --input datasets/raw/originals \
-  --output-dir datasets/raw/demucsVocals
+  --input datasets/raw/${LORA_NAME}/originals \
+  --output-dir datasets/raw/${LORA_NAME}/demucsVocals
 ```
 
 GPU メモリ不足時:
 
 ```bash
 uv run --project moshi-finetune --with demucs python scripts/extractVocalsDemucs.py \
-  --input datasets/raw/source001.wav \
-  --output-dir datasets/raw/demucsVocals \
+  --input datasets/raw/${LORA_NAME}/source001.wav \
+  --output-dir datasets/raw/${LORA_NAME}/demucsVocals \
   --segment 7.8
 ```
 
 出力例:
 
 ```text
-datasets/raw/demucsVocals/source001_vocals.wav
+datasets/raw/${LORA_NAME}/demucsVocals/source001_vocals.wav
 ```
 
 Demucs は `--two-stems vocals` でボーカルと伴奏を分けますが、話者分離ツールではありません。複数人の声を人物ごとに分けたい場合は、手作業確認や話者分離ツールを併用してください。
@@ -611,83 +663,94 @@ Demucs は `--two-stems vocals` でボーカルと伴奏を分けますが、話
 
 ## 7. JSONL と学習用 transcript
 
-`datasets/stereo/*.wav` から `datasets/train.jsonl` を作ります。
+`datasets/stereo/${LORA_NAME}/*.wav` から `datasets/${LORA_NAME}.jsonl` を作ります。  
+一個前の章の最後の方でもやったやつです
 
 ```bash
 uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
-  --audio-dir datasets/stereo \
-  --output datasets/train.jsonl
+  --audio-dir datasets/stereo/${LORA_NAME} \
+  --output datasets/${LORA_NAME}.jsonl
 ```
 
 形式:
 
 ```json
-{"path": "stereo/sample001.wav", "duration": 12.34}
+{ "path": "stereo/${LORA_NAME}/sample001.wav", "duration": 12.34 }
 ```
 
-`path` は `datasets/train.jsonl` からの相対パスで保存します。`datasets/stereo/...` と書くと、学習時に `datasets/datasets/stereo/...` と二重解決されて音声が見つからなくなります。
+`path` は `datasets/${LORA_NAME}.jsonl` からの相対パスで保存します。`datasets/stereo/${LORA_NAME}/...` と書くと、学習時に `datasets/datasets/stereo/${LORA_NAME}/...` と二重解決されて音声が見つからなくなります。
 
 学習用 transcript を生成します。Whisper はローカル実行で、基本は `large-v3` を使います。
 
 ```bash
 uv run --project moshi-finetune python scripts/annotateDataset.py \
-  datasets/train.jsonl \
+  datasets/${LORA_NAME}.jsonl \
   --lang ja \
   --whisper-model large-v3 \
   --whisper-cache-dir models/whisper
 ```
 
-既に近似生成した `datasets/stereo/*.json` がある場合、`annotateDataset.py` は既存ファイルをスキップします。Whisper で作り直す場合は `--overwrite-existing` を付けます。
+既に近似生成した `datasets/stereo/${LORA_NAME}/*.json` がある場合、`annotateDataset.py` は既存ファイルをスキップします。Whisper で作り直す場合は `--overwrite-existing` を付けます。
 
 ```bash
 uv run --project moshi-finetune python scripts/annotateDataset.py \
-  datasets/train.jsonl \
+  datasets/${LORA_NAME}.jsonl \
   --lang ja \
   --whisper-model large-v3 \
   --whisper-cache-dir models/whisper \
   --overwrite-existing
 ```
 
-すでに `processRawToStereo.py` で作った `datasets/stereo/*.responses.json` があり、Whisper を再実行せずにまず学習を通したい場合は、近似 transcript を作れます。
+すでに `processRawToStereo.py` で作った `datasets/stereo/${LORA_NAME}/*.responses.json` があり、Whisper を再実行せずにまず学習を通したい場合は、近似 transcript を作れます。
 
 ```bash
 uv run --project moshi-finetune python scripts/createAnnotationJsonFromResponses.py \
-  datasets/train.jsonl
+  datasets/${LORA_NAME}.jsonl
 ```
 
-これは `*.responses.json` 内のセグメント時刻から `datasets/stereo/*.json` を作る高速な方法です。ただし word timestamp ではなく近似なので、品質優先では `annotateDataset.py` を使ってください。
+これは `*.responses.json` 内のセグメント時刻から `datasets/stereo/${LORA_NAME}/*.json` を作る高速な方法です。ただし word timestamp ではなく近似なので、品質優先では `annotateDataset.py` を使ってください。
 
 wav と json が揃っているか確認:
 
 ```bash
 uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
-  --audio-dir datasets/stereo \
-  --output datasets/train.jsonl \
+  --audio-dir datasets/stereo/${LORA_NAME} \
+  --output datasets/${LORA_NAME}.jsonl \
   --require-transcript
 ```
 
 ---
 
-## 8. 学習
+## 8. 学習と config 生成
 
-設定ファイル:
+管理対象にする設定ファイルは次の 1 つです。
 
 ```text
-config/llmJpMoshiLora.yaml
+config/llmJpMoshiLora.example.yaml
 ```
+
+実際に学習で使う `config/${LORA_NAME}.yaml` は、`train-run.sh` の中で `scripts/renderTrainConfig.py` によって自動生成されます。
+
+`renderTrainConfig.py` は雛形を読み、少なくとも以下の値を今の `.env` に合わせて差し替えます。
+
+- `data.train_data`
+- `run_dir`
+- `data.eval_data` を指定した場合はその値
+
+つまり、LoRA ごとに手書きの config を増やすのではなく、雛形 1 つを管理して、実運用の config は毎回生成する運用です。生成された `config/${LORA_NAME}.yaml` は `.gitignore` 対象です。
 
 主な設定:
 
-| 項目 | 値 |
-|---|---|
+| 項目                     | 値                       |
+| ------------------------ | ------------------------ |
 | `moshi_paths.hf_repo_id` | `llm-jp/llm-jp-moshi-v1` |
-| `run_dir` | `loras/llmJpMoshiV1` |
-| `lora.rank` | `128` |
-| `duration_sec` | `60` |
-| `batch_size` | `1` |
-| `param_dtype` | `float16` |
+| `run_dir`                | `.env` の `RUN_DIR`      |
+| `lora.rank`              | `128`                    |
+| `duration_sec`           | `60`                     |
+| `batch_size`             | `1`                      |
+| `param_dtype`            | `float16`                |
 
-通常は `train-run.sh` を使います。先に `datasets/stereo/*.json` が揃っているか確認し、不足している場合はモデルを読み込む前に停止します。既に `run_dir` の出力先がある場合は、削除せず `*.previous.YYYYMMDD-HHMMSS` に退避してから新しく開始します。
+通常は `train-run.sh` を使います。先に `datasets/stereo/${LORA_NAME}/*.json` が揃っているか確認し、不足している場合はモデルを読み込む前に停止します。既に `run_dir` の出力先がある場合は、削除せず `*.previous.YYYYMMDD-HHMMSS` に退避してから新しく開始します。
 
 1 GPU:
 
@@ -707,9 +770,18 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash train-run.sh
 CUDA_VISIBLE_DEVICES=0,1,2,3 NPROC_PER_NODE=4 bash train-run.sh
 ```
 
+`CONFIG_PATH` を明示した場合は、その config をそのまま使います。通常は未指定のままで構いません。
+
 手動で実行する場合:
 
 ```bash
+UV_CACHE_DIR=.uv-cache \
+uv run --project moshi-finetune python scripts/renderTrainConfig.py \
+  --template config/llmJpMoshiLora.example.yaml \
+  --output "$TRAIN_CONFIG_PATH" \
+  --train-data "$TRAIN_JSONL" \
+  --run-dir "$RUN_DIR"
+
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 NO_TORCH_COMPILE="${NO_TORCH_COMPILE:-1}" \
 HF_HOME="$PWD/models/huggingface" \
@@ -717,7 +789,7 @@ uv run --project moshi-finetune torchrun \
   --nproc-per-node 4 \
   --master_port 29501 \
   moshi-finetune/train.py \
-  config/llmJpMoshiLora.yaml
+  "$TRAIN_CONFIG_PATH"
 ```
 
 別の分散ジョブと同時に動かす場合は、`MASTER_PORT=29502 bash train-run.sh` のようにポートを変えてください。
@@ -727,7 +799,7 @@ Tesla P40 など CUDA Capability 7.0 未満のGPUでは、PyTorch Inductor / Tri
 LoRA は以下に保存されます。
 
 ```text
-loras/llmJpMoshiV1/checkpoints/checkpoint_XXXXXX/consolidated/
+loras/${LORA_NAME}/checkpoints/checkpoint_XXXXXX/consolidated/
 ```
 
 最新 LoRA を固定パスにコピー:
@@ -739,8 +811,8 @@ uv run --project moshi-finetune python scripts/exportLatestLora.py
 出力:
 
 ```text
-loras/llmJpMoshiV1/latest/lora.safetensors
-loras/llmJpMoshiV1/latest/config.json
+loras/${LORA_NAME}/latest/lora.safetensors
+loras/${LORA_NAME}/latest/config.json
 ```
 
 ---
@@ -753,7 +825,7 @@ loras/llmJpMoshiV1/latest/config.json
 bash start.sh
 ```
 
-`start.sh` は最新 checkpoint を `loras/llmJpMoshiV1/latest/` にコピーしてから、その LoRA で Moshi server を起動します。起動後、`http://localhost:8998` にアクセスします。
+`start.sh` は最新 checkpoint を `loras/${LORA_NAME}/latest/` にコピーしてから、その LoRA で Moshi server を起動します。起動後、`http://localhost:8998` にアクセスします。
 
 推論は `moshi.server` が1プロセス1GPUの構成です。モデルを複数GPUへ分割するのではなく、複数GPUで試したい場合はGPUごとに別ポートでサーバーを起動します。
 
@@ -779,12 +851,12 @@ bash start.sh --half --no_fuse_lora
 途中の checkpoint を直接テストしたい場合:
 
 ```bash
-LORA_WEIGHT=loras/llmJpMoshiV1/checkpoints/checkpoint_001200/consolidated/lora.safetensors \
-CONFIG_PATH=loras/llmJpMoshiV1/checkpoints/checkpoint_001200/consolidated/config.json \
+LORA_WEIGHT=loras/${LORA_NAME}/checkpoints/checkpoint_001200/consolidated/lora.safetensors \
+MOSHI_CONFIG_PATH=loras/${LORA_NAME}/checkpoints/checkpoint_001200/consolidated/config.json \
 bash start.sh
 ```
 
-`LORA_WEIGHT` と `CONFIG_PATH` は同じ checkpoint のペアを指定してください。
+`LORA_WEIGHT` と `MOSHI_CONFIG_PATH` は同じ checkpoint のペアを指定してください。
 
 手動で起動する場合:
 
@@ -793,8 +865,8 @@ HF_HOME="$PWD/models/huggingface" \
 NO_TORCH_COMPILE=1 \
 uv run --project moshi-finetune python -m moshi.server \
   --hf-repo llm-jp/llm-jp-moshi-v1 \
-  --lora-weight loras/llmJpMoshiV1/latest/lora.safetensors \
-  --config-path loras/llmJpMoshiV1/latest/config.json
+  --lora-weight loras/${LORA_NAME}/latest/lora.safetensors \
+  --config-path loras/${LORA_NAME}/latest/config.json
 ```
 
 エコーを避けるため、確認時はイヤホンかヘッドホンを使ってください。
@@ -831,7 +903,7 @@ uv run --project moshi-finetune python -m moshi.server \
 
 - `.env` の `OPENAI_API_KEY` が正しいか確認してください
 - `OPENAI_MODEL=anthropic/claude-sonnet-4.6` が利用可能か確認してください
-- 途中まで成功していれば `datasets/cache/<音声名>/responses.json` に保存されているため、設定修正後に同じコマンドを再実行できます
+- 途中まで成功していれば `datasets/cache/${LORA_NAME}/<音声名>/responses.json` に保存されているため、設定修正後に同じコマンドを再実行できます
 
 ---
 
