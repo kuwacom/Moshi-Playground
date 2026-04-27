@@ -39,7 +39,15 @@ fi
 
 gpu_ids="${CUDA_VISIBLE_DEVICES:-0}"
 IFS=',' read -ra gpu_id_list <<< "$gpu_ids"
-nproc_per_node="${NPROC_PER_NODE:-${#gpu_id_list[@]}}"
+gpu_count="${#gpu_id_list[@]}"
+nproc_per_node="${NPROC_PER_NODE:-auto}"
+if [ "$nproc_per_node" = "auto" ] || [ "$nproc_per_node" = "" ]; then
+  nproc_per_node="$gpu_count"
+fi
+if ! [[ "$nproc_per_node" =~ ^[0-9]+$ ]] || [ "$nproc_per_node" -lt 1 ]; then
+  echo "NPROC_PER_NODE must be a positive integer or auto: $nproc_per_node" >&2
+  exit 1
+fi
 master_port="${MASTER_PORT:-29501}"
 
 echo "Training configuration"
@@ -50,6 +58,9 @@ echo "  master_port:          $master_port"
 echo "  train_jsonl:          $TRAIN_JSONL"
 echo "  run_dir:              $run_dir"
 echo "  config_path:          $config_path"
+if [ "$gpu_count" -gt 1 ] && [ "$nproc_per_node" -eq 1 ]; then
+  echo "Warning: multiple GPUs are visible, but nproc_per_node is 1. Only one training process will run."
+fi
 
 # llm-jp/llm-jp-moshi-v1をLoRAで学習する
 CUDA_VISIBLE_DEVICES="$gpu_ids" \

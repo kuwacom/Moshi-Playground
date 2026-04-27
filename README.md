@@ -157,6 +157,12 @@ RUN_DIR=loras/${LORA_NAME}
 LORA_LATEST_DIR=${RUN_DIR}/latest
 TRAIN_CONFIG_TEMPLATE_PATH=config/llmJpMoshiLora.example.yaml
 TRAIN_CONFIG_PATH=config/${LORA_NAME}.yaml
+HF_REPO=llm-jp/llm-jp-moshi-v1
+
+CUDA_VISIBLE_DEVICES=0
+NPROC_PER_NODE=auto
+MASTER_PORT=29501
+NO_TORCH_COMPILE=1
 
 OPENAI_BASE_URL=
 OPENAI_API_KEY=ここにAPIキー
@@ -164,6 +170,32 @@ OPENAI_MODEL=anthropic/claude-sonnet-4.6
 KUWA_TTS_URL=
 KUWA_TTS_TYPE=10
 ```
+
+主な環境変数:
+
+| 変数                         | 説明                                                                                                                                                                         |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LORA_NAME`                  | LoRA 名です。dataset、config、出力先の既定パスに使われます。                                                                                                                 |
+| `DATASET_ROOT`               | dataset 配下のルートディレクトリです。                                                                                                                                       |
+| `DATASET_RAW_DIR`            | 元音声を置くディレクトリです。                                                                                                                                               |
+| `DATASET_STEREO_DIR`         | 学習用 stereo wav と transcript json を置くディレクトリです。                                                                                                                |
+| `DATASET_CACHE_DIR`          | Whisper、LLM、TTS の途中結果を置くディレクトリです。                                                                                                                         |
+| `DATASET_TTS_DIR`            | TTS 単体確認用の音声を置くディレクトリです。                                                                                                                                 |
+| `TRAIN_JSONL`                | 学習に使う JSONL の出力先です。                                                                                                                                              |
+| `RUN_DIR`                    | 学習結果を保存するディレクトリです。既に存在する場合は `*.previous.YYYYMMDD-HHMMSS` に退避されます。                                                                         |
+| `LORA_LATEST_DIR`            | 最新 checkpoint から推論用 LoRA を書き出すディレクトリです。                                                                                                                 |
+| `TRAIN_CONFIG_TEMPLATE_PATH` | 管理対象にする学習 config の雛形です。                                                                                                                                       |
+| `TRAIN_CONFIG_PATH`          | `train-run.sh` が生成する LoRA 別の学習 config です。                                                                                                                        |
+| `HF_REPO`                    | ベースにする Hugging Face repo です。                                                                                                                                        |
+| `CUDA_VISIBLE_DEVICES`       | 学習や推論から見える GPU ID です。例: `0`、`0,1`、`0,1,2,3`。                                                                                                                |
+| `NPROC_PER_NODE`             | `torchrun` が 1 ノード内で起動する学習プロセス数です。基本的には学習に使う GPU 数と同じ値にします。`auto` の場合は `CUDA_VISIBLE_DEVICES` に書いた GPU ID の数に合わせます。 |
+| `MASTER_PORT`                | `torchrun` の分散通信用ポートです。別の分散ジョブと同時に動かす場合は変更してください。                                                                                      |
+| `NO_TORCH_COMPILE`           | `1` の場合は torch compile を無効化します。古い GPU では `1` を推奨します。                                                                                                  |
+| `OPENAI_BASE_URL`            | OpenAI 互換 API のベース URL です。                                                                                                                                          |
+| `OPENAI_API_KEY`             | OpenAI 互換 API の API キーです。                                                                                                                                            |
+| `OPENAI_MODEL`               | OpenAI 互換 API で使うモデル名です。                                                                                                                                         |
+| `KUWA_TTS_URL`               | Kuwa TTS API の URL です。                                                                                                                                                   |
+| `KUWA_TTS_TYPE`              | Kuwa TTS API の話者タイプです。                                                                                                                                              |
 
 疎通確認だけしたい場合は、OpenAI Python ライブラリ経由で簡単に確認できます。
 
@@ -193,8 +225,30 @@ PY
 
 ### shell script での使われ方
 
-`prepare-dataset.sh`、`train-run.sh`、`start.sh` は共通で `scripts/loadLoraEnv.sh` を `source` します。  
-ここで `.env` を読み込み、未指定のパスを `LORA_NAME` から補完します。
+`prepare-dataset.sh`、`prepare-dataset-test.sh`、`train-run.sh`、`start.sh`、`docker/build-lora-image.sh` は共通で `scripts/loadLoraEnv.sh` を `source` します。  
+ここで `.env` を読み込み、未指定のパスを `LORA_NAME` から補完します。`ENV_FILE` を指定すると、読み込む `.env` を変更できます。
+
+注意点として、各 script は起動後に `.env` を `source` します。そのため同名の変数が `.env` に書かれている場合、`CUDA_VISIBLE_DEVICES=0,1 bash train-run.sh` のようにコマンド先頭で指定した値よりも `.env` 側の値が優先されます。一時的に設定を変えたい場合は、`.env` を編集するか、別ファイルを `ENV_FILE=path/to/.env bash train-run.sh` のように指定してください。
+
+`loadLoraEnv.sh` が補完する既定値:
+
+| 変数 | 未指定時の値 |
+| ---- | ---- |
+| `ENV_FILE` | repo root の `.env` |
+| `LORA_NAME` | `shigureui1` |
+| `DATASET_ROOT` | `datasets` |
+| `DATASET_RAW_DIR` | `${DATASET_ROOT}/raw/${LORA_NAME}` |
+| `DATASET_STEREO_DIR` | `${DATASET_ROOT}/stereo/${LORA_NAME}` |
+| `DATASET_CACHE_DIR` | `${DATASET_ROOT}/cache/${LORA_NAME}` |
+| `DATASET_TTS_DIR` | `${DATASET_ROOT}/tts/${LORA_NAME}` |
+| `TRAIN_JSONL` | `${DATASET_ROOT}/${LORA_NAME}.jsonl` |
+| `RUN_DIR` | `loras/${LORA_NAME}` |
+| `LORA_LATEST_DIR` | `${RUN_DIR}/latest` |
+| `TRAIN_CONFIG_TEMPLATE_PATH` | `config/llmJpMoshiLora.example.yaml` |
+| `TRAIN_CONFIG_PATH` | `config/${LORA_NAME}.yaml` |
+| `HF_REPO` | `llm-jp/llm-jp-moshi-v1` |
+
+`LORA_NAME` は英数字、dot、underscore、hyphen のみ使えます。不正な文字が含まれている場合、script は停止します。
 
 例えば `LORA_NAME=example-lora` の時、未指定の値は以下のように解決されます。
 
@@ -208,6 +262,26 @@ TRAIN_CONFIG_PATH=config/example-lora.yaml
 ```
 
 つまり `.env` で `LORA_NAME` を切り替えると、dataset、jsonl、学習出力先、推論対象がまとめて切り替わります。
+
+各 shell script の追加デフォルトと挙動:
+
+| script | 追加デフォルト | 主な挙動 |
+| ------ | -------------- | -------- |
+| `prepare-dataset.sh` | `processRawToStereo.py` に `--response-delay-sec 0.5`、`--tts-speed 1.05` を渡します。`annotateDataset.py` は `--lang ja`、`--whisper-model large-v3`、`--whisper-cache-dir models/whisper`、`--overwrite-existing` で実行します。 | raw 音声から stereo wav を作り、`TRAIN_JSONL` を生成し、Moshi 用 transcript json を作ります。`DATASET_RAW_DIR`、`DATASET_STEREO_DIR`、`DATASET_CACHE_DIR` は自動作成します。 |
+| `prepare-dataset-test.sh` | `prepare-dataset.sh` の stereo 生成だけを `--limit 1`、`--max-segments 60`、`--max-response-chars 40` 付きで実行します。 | 1 件だけ短く処理して、TTS や stereo 生成の疎通確認に使います。JSONL 生成と Whisper annotation は実行しません。 |
+| `train-run.sh` | `UV_CACHE_DIR=.uv-cache`、`CONFIG_PATH` 未指定時は `TRAIN_CONFIG_PATH`、`RENDER_TRAIN_CONFIG` 未指定時は `CONFIG_PATH` 未指定なら `1`、指定ありなら `0`、`CUDA_VISIBLE_DEVICES=0`、`NPROC_PER_NODE=auto`、`MASTER_PORT=29501`、`NO_TORCH_COMPILE=1`、`HF_HOME=$PWD/models/huggingface` です。 | 学習前に `TRAIN_JSONL` を作り直し、transcript json が揃っているか確認します。`CONFIG_PATH` 未指定なら学習 config を生成します。`RUN_DIR` が既に存在する場合は削除せず `*.previous.YYYYMMDD-HHMMSS` に退避します。`NPROC_PER_NODE=auto` は `CUDA_VISIBLE_DEVICES` の GPU 数に展開されます。 |
+| `start.sh` | `UV_CACHE_DIR=.uv-cache`、`SKIP_EXPORT_LATEST=0`、`LORA_WEIGHT=${LORA_LATEST_DIR}/lora.safetensors`、`MOSHI_CONFIG_PATH` 未指定時は `CONFIG_PATH`、それも未指定なら `${LORA_LATEST_DIR}/config.json`、`CUDA_VISIBLE_DEVICES=0`、`HF_HOME=$PWD/models/huggingface`、`NO_TORCH_COMPILE=1` です。 | 既定では起動前に `RUN_DIR` から latest LoRA を書き出します。書き出しを飛ばす場合は `SKIP_EXPORT_LATEST=1` を使います。LoRA weight または config が見つからない場合は停止します。最後の引数はそのまま `python -m moshi.server` に渡します。 |
+| `docker/build-lora-image.sh` | `IMAGE_REF=moshi-lora-${LORA_NAME}:local`、`LORA_DIR=${LORA_LATEST_DIR}`、`HF_HOME=models/huggingface`、`MOSHI_COMMIT=061cc4c630d9e11722e08b7d02b1836ba58f30e8`、`PYTORCH_IMAGE=pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime` です。 | latest LoRA と config を Docker build context にコピーして image を作ります。`--include-hf-cache` を付けた場合だけ Hugging Face cache も同梱します。 |
+
+`loadLoraEnv.sh` を使わない shell script:
+
+| script | 追加デフォルト | 主な挙動 |
+| ------ | -------------- | -------- |
+| `scripts/bootstrapMoshiEnv.sh` | `UV_LINK_MODE=copy` です。 | `moshi-finetune/.venv/bin/python` が無ければ `uv venv --project moshi-finetune` を実行し、その後 `uv sync --project moshi-finetune` を実行します。 |
+| `docker/run-lora-image.sh` | `IMAGE_REF=moshi-lora:local`、`PORT=8998`、`GPUS=all`、`HF_HOME_MOUNT` 未指定、`USE_SUDO_DOCKER=0` です。 | Docker image を `docker run --rm -it --gpus` 付きで起動します。`--hf-home` を指定した場合だけホストの Hugging Face cache を読み取り専用で mount します。 |
+| `docker/start-lora-server.sh` | `LORA_WEIGHT=/opt/moshi/lora/lora.safetensors`、`MOSHI_CONFIG_PATH` 未指定時は `CONFIG_PATH`、それも未指定なら `/opt/moshi/lora/config.json`、`HF_REPO=llm-jp/llm-jp-moshi-v1`、`HOST=0.0.0.0`、`PORT=8998`、`HF_HOME=/opt/moshi/models/huggingface`、`NO_TORCH_COMPILE=1` です。 | コンテナ内で `python -m moshi.server` を起動します。LoRA weight または config が見つからない場合は停止します。 |
+
+Docker 用の詳しい使い方は [docker/README.md](docker/README.md) も参照してください。
 
 ---
 
@@ -760,15 +834,23 @@ bash train-run.sh
 
 複数 GPU:
 
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 bash train-run.sh
+```dotenv
+CUDA_VISIBLE_DEVICES=0,1,2,3
+NPROC_PER_NODE=auto
 ```
 
-`train-run.sh` は `CUDA_VISIBLE_DEVICES` の数から `torchrun --nproc-per-node` を自動設定します。明示したい場合は `NPROC_PER_NODE` を指定します。
-
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 NPROC_PER_NODE=4 bash train-run.sh
+bash train-run.sh
 ```
+
+`NPROC_PER_NODE` の意味は [3. .env 設定](#3-env-設定) を参照してください。明示したい場合は `.env` に次のように指定します。
+
+```dotenv
+CUDA_VISIBLE_DEVICES=0,1,2,3
+NPROC_PER_NODE=4
+```
+
+`.env` に `NPROC_PER_NODE=1` が残っている場合、GPU を複数見せても 1 プロセスだけで起動します。この場合、ログには `nproc_per_node: 1` や `world_size: 1` と出て、実質的に 1 GPU だけを使います。
 
 `CONFIG_PATH` を明示した場合は、その config をそのまま使います。通常は未指定のままで構いません。
 
