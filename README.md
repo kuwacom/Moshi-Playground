@@ -146,7 +146,7 @@ cp .env.example .env
 `.env`:
 
 ```dotenv
-LORA_NAME=example-lora
+LORA_NAME=moshi-lora
 DATASET_ROOT=datasets
 DATASET_RAW_DIR=${DATASET_ROOT}/raw/${LORA_NAME}
 DATASET_STEREO_DIR=${DATASET_ROOT}/stereo/${LORA_NAME}
@@ -171,31 +171,60 @@ KUWA_TTS_URL=
 KUWA_TTS_TYPE=10
 ```
 
-主な環境変数:
+最低限必要な環境変数:
 
-| 変数                         | 説明                                                                                                                                                                         |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LORA_NAME`                  | LoRA 名です。dataset、config、出力先の既定パスに使われます。                                                                                                                 |
-| `DATASET_ROOT`               | dataset 配下のルートディレクトリです。                                                                                                                                       |
-| `DATASET_RAW_DIR`            | 元音声を置くディレクトリです。                                                                                                                                               |
-| `DATASET_STEREO_DIR`         | 学習用 stereo wav と transcript json を置くディレクトリです。                                                                                                                |
-| `DATASET_CACHE_DIR`          | Whisper、LLM、TTS の途中結果を置くディレクトリです。                                                                                                                         |
-| `DATASET_TTS_DIR`            | TTS 単体確認用の音声を置くディレクトリです。                                                                                                                                 |
-| `TRAIN_JSONL`                | 学習に使う JSONL の出力先です。                                                                                                                                              |
-| `RUN_DIR`                    | 学習結果を保存するディレクトリです。既に存在する場合は `*.previous.YYYYMMDD-HHMMSS` に退避されます。                                                                         |
-| `LORA_LATEST_DIR`            | 最新 checkpoint から推論用 LoRA を書き出すディレクトリです。                                                                                                                 |
-| `TRAIN_CONFIG_TEMPLATE_PATH` | 管理対象にする学習 config の雛形です。                                                                                                                                       |
-| `TRAIN_CONFIG_PATH`          | `train-run.sh` が生成する LoRA 別の学習 config です。                                                                                                                        |
-| `HF_REPO`                    | ベースにする Hugging Face repo です。                                                                                                                                        |
-| `CUDA_VISIBLE_DEVICES`       | 学習や推論から見える GPU ID です。例: `0`、`0,1`、`0,1,2,3`。                                                                                                                |
-| `NPROC_PER_NODE`             | `torchrun` が 1 ノード内で起動する学習プロセス数です。基本的には学習に使う GPU 数と同じ値にします。`auto` の場合は `CUDA_VISIBLE_DEVICES` に書いた GPU ID の数に合わせます。 |
-| `MASTER_PORT`                | `torchrun` の分散通信用ポートです。別の分散ジョブと同時に動かす場合は変更してください。                                                                                      |
-| `NO_TORCH_COMPILE`           | `1` の場合は torch compile を無効化します。古い GPU では `1` を推奨します。                                                                                                  |
-| `OPENAI_BASE_URL`            | OpenAI 互換 API のベース URL です。                                                                                                                                          |
-| `OPENAI_API_KEY`             | OpenAI 互換 API の API キーです。                                                                                                                                            |
-| `OPENAI_MODEL`               | OpenAI 互換 API で使うモデル名です。                                                                                                                                         |
-| `KUWA_TTS_URL`               | Kuwa TTS API の URL です。                                                                                                                                                   |
-| `KUWA_TTS_TYPE`              | Kuwa TTS API の話者タイプです。                                                                                                                                              |
+| 用途 | 必須 |
+| ---- | ---- |
+| 既存の stereo wav / transcript json で学習する | `LORA_NAME` |
+| 一人配信から LLM + TTS で会話データを作る | `LORA_NAME`、`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL`、`KUWA_TTS_URL`、`KUWA_TTS_TYPE` |
+| 複数 GPU で学習する | `CUDA_VISIBLE_DEVICES`、`NPROC_PER_NODE` |
+
+その他のパス類は `LORA_NAME` から自動補完されます。1 GPU で学習するだけなら `CUDA_VISIBLE_DEVICES=0`、`NPROC_PER_NODE=auto` のままで構いません。
+
+環境変数:
+
+| 変数 | 使う場所 | default | 説明 |
+| ---- | -------- | ------- | ---- |
+| `ENV_FILE` | `loadLoraEnv.sh` 使用 script | repo root の `.env` | 読み込む `.env` ファイルを切り替えます |
+| `LORA_NAME` | 全体 | `moshi-lora` | LoRA 名です。各種パスの既定値に使われます |
+| `DATASET_ROOT` | dataset 系 | `datasets` | dataset 配下のルートです |
+| `DATASET_RAW_DIR` | dataset 系 | `${DATASET_ROOT}/raw/${LORA_NAME}` | 元音声を置く場所です |
+| `DATASET_STEREO_DIR` | dataset / 学習 | `${DATASET_ROOT}/stereo/${LORA_NAME}` | 学習用 stereo wav と transcript json を置く場所です |
+| `DATASET_CACHE_DIR` | dataset 系 | `${DATASET_ROOT}/cache/${LORA_NAME}` | Whisper、LLM、TTS の途中結果を置く場所です |
+| `DATASET_TTS_DIR` | TTS 確認 | `${DATASET_ROOT}/tts/${LORA_NAME}` | TTS 単体確認用の音声を置く場所です |
+| `TRAIN_JSONL` | dataset / 学習 | `${DATASET_ROOT}/${LORA_NAME}.jsonl` | 学習に使う JSONL です |
+| `RUN_DIR` | 学習 / 推論 | `loras/${LORA_NAME}` | 学習結果の保存先です |
+| `LORA_LATEST_DIR` | 推論 / Docker build | `${RUN_DIR}/latest` | 推論用に書き出した最新 LoRA の保存先です |
+| `TRAIN_CONFIG_TEMPLATE_PATH` | 学習 | `config/llmJpMoshiLora.example.yaml` | 学習 config の雛形です |
+| `TRAIN_CONFIG_PATH` | 学習 | `config/${LORA_NAME}.yaml` | `train-run.sh` が生成する学習 config です |
+| `HF_REPO` | 学習 / 推論 / Docker | `llm-jp/llm-jp-moshi-v1` | ベースにする Hugging Face repo です |
+| `HF_HOME` | 学習 / 推論 / Docker | ローカル: `models/huggingface` | Hugging Face cache の場所です |
+| `CUDA_VISIBLE_DEVICES` | 学習 / 推論 | `0` | 見せる GPU ID です。例: `0,1` |
+| `NPROC_PER_NODE` | 学習 | `auto` | `torchrun` のプロセス数です。`auto` は GPU 数に合わせます |
+| `MASTER_PORT` | 学習 | `29501` | `torchrun` の分散通信用ポートです |
+| `NO_TORCH_COMPILE` | 学習 / 推論 / Docker | `1` | `1` で torch compile を無効化します |
+| `UV_CACHE_DIR` | 学習 / 推論 | `.uv-cache` | `uv` の cache ディレクトリです |
+| `CONFIG_PATH` | 学習 / 推論 / Docker | 未指定 | config を明示します。`MOSHI_CONFIG_PATH` があればそちら優先です |
+| `RENDER_TRAIN_CONFIG` | 学習 | `CONFIG_PATH` なし: `1` / あり: `0` | `1` なら学習前に config を生成します |
+| `SKIP_EXPORT_LATEST` | 推論 | `0` | `1` で起動前の latest LoRA 書き出しを省略します |
+| `LORA_WEIGHT` | 推論 / Docker | `${LORA_LATEST_DIR}/lora.safetensors` | LoRA weight を直接指定します |
+| `MOSHI_CONFIG_PATH` | 推論 / Docker | `${LORA_LATEST_DIR}/config.json` | LoRA と同じ checkpoint の `config.json` を指定します |
+| `OPENAI_BASE_URL` | 応答生成 | 未指定 | OpenAI 互換 API のベース URL です |
+| `OPENAI_API_KEY` | 応答生成 | 未指定 | OpenAI 互換 API の API キーです |
+| `OPENAI_MODEL` | 応答生成 | `anthropic/claude-sonnet-4.6` | OpenAI 互換 API で使うモデル名です |
+| `KUWA_TTS_URL` | TTS 生成 | 未指定 | Kuwa TTS API の URL です |
+| `KUWA_TTS_TYPE` | TTS 生成 | `10` | Kuwa TTS API の話者タイプです |
+| `UV_LINK_MODE` | 環境構築 | `copy` | `uv` の link mode です |
+| `IMAGE_REF` | Docker build / run | build: `moshi-lora-${LORA_NAME}:local` | Docker image 名です |
+| `LORA_DIR` | Docker build | `${LORA_LATEST_DIR}` | image に入れる LoRA 一式のディレクトリです |
+| `PLATFORM` | Docker build | 未指定 | `docker build --platform` を指定します |
+| `MOSHI_COMMIT` | Docker build | 固定 commit | image 内で使う `kyutai-labs/moshi` の commit です |
+| `PYTORCH_IMAGE` | Docker build | PyTorch CUDA runtime image | Docker のベース image です |
+| `USE_SUDO_DOCKER` | Docker build / run | `0` | `1` で `sudo docker` を使います |
+| `PORT` | Docker run / server | `8998` | server の port です |
+| `HOST` | Docker server | `0.0.0.0` | server の bind host です |
+| `GPUS` | Docker run | `all` | `docker run --gpus` に渡す値です |
+| `HF_HOME_MOUNT` | Docker run | 未指定 | ホストの HF cache を mount する場合に指定します |
 
 疎通確認だけしたい場合は、OpenAI Python ライブラリ経由で簡単に確認できます。
 
@@ -230,56 +259,38 @@ PY
 
 注意点として、各 script は起動後に `.env` を `source` します。そのため同名の変数が `.env` に書かれている場合、`CUDA_VISIBLE_DEVICES=0,1 bash train-run.sh` のようにコマンド先頭で指定した値よりも `.env` 側の値が優先されます。一時的に設定を変えたい場合は、`.env` を編集するか、別ファイルを `ENV_FILE=path/to/.env bash train-run.sh` のように指定してください。
 
-`loadLoraEnv.sh` が補完する既定値:
+`loadLoraEnv.sh` が補完する既定値は、上の環境変数表の `default時` を参照してください。`LORA_NAME` は英数字、dot、underscore、hyphen のみ使えます。不正な文字が含まれている場合、script は停止します。
 
-| 変数 | 未指定時の値 |
-| ---- | ---- |
-| `ENV_FILE` | repo root の `.env` |
-| `LORA_NAME` | `shigureui1` |
-| `DATASET_ROOT` | `datasets` |
-| `DATASET_RAW_DIR` | `${DATASET_ROOT}/raw/${LORA_NAME}` |
-| `DATASET_STEREO_DIR` | `${DATASET_ROOT}/stereo/${LORA_NAME}` |
-| `DATASET_CACHE_DIR` | `${DATASET_ROOT}/cache/${LORA_NAME}` |
-| `DATASET_TTS_DIR` | `${DATASET_ROOT}/tts/${LORA_NAME}` |
-| `TRAIN_JSONL` | `${DATASET_ROOT}/${LORA_NAME}.jsonl` |
-| `RUN_DIR` | `loras/${LORA_NAME}` |
-| `LORA_LATEST_DIR` | `${RUN_DIR}/latest` |
-| `TRAIN_CONFIG_TEMPLATE_PATH` | `config/llmJpMoshiLora.example.yaml` |
-| `TRAIN_CONFIG_PATH` | `config/${LORA_NAME}.yaml` |
-| `HF_REPO` | `llm-jp/llm-jp-moshi-v1` |
-
-`LORA_NAME` は英数字、dot、underscore、hyphen のみ使えます。不正な文字が含まれている場合、script は停止します。
-
-例えば `LORA_NAME=example-lora` の時、未指定の値は以下のように解決されます。
+例えば `LORA_NAME=moshi-lora` の時、未指定の値は以下のように解決されます。
 
 ```text
-DATASET_RAW_DIR=datasets/raw/example-lora
-DATASET_STEREO_DIR=datasets/stereo/example-lora
-DATASET_CACHE_DIR=datasets/cache/example-lora
-TRAIN_JSONL=datasets/example-lora.jsonl
-RUN_DIR=loras/example-lora
-TRAIN_CONFIG_PATH=config/example-lora.yaml
+DATASET_RAW_DIR=datasets/raw/moshi-lora
+DATASET_STEREO_DIR=datasets/stereo/moshi-lora
+DATASET_CACHE_DIR=datasets/cache/moshi-lora
+TRAIN_JSONL=datasets/moshi-lora.jsonl
+RUN_DIR=loras/moshi-lora
+TRAIN_CONFIG_PATH=config/moshi-lora.yaml
 ```
 
 つまり `.env` で `LORA_NAME` を切り替えると、dataset、jsonl、学習出力先、推論対象がまとめて切り替わります。
 
-各 shell script の追加デフォルトと挙動:
+各 shell script の主な挙動:
 
-| script | 追加デフォルト | 主な挙動 |
-| ------ | -------------- | -------- |
-| `prepare-dataset.sh` | `processRawToStereo.py` に `--response-delay-sec 0.5`、`--tts-speed 1.05` を渡します。`annotateDataset.py` は `--lang ja`、`--whisper-model large-v3`、`--whisper-cache-dir models/whisper`、`--overwrite-existing` で実行します。 | raw 音声から stereo wav を作り、`TRAIN_JSONL` を生成し、Moshi 用 transcript json を作ります。`DATASET_RAW_DIR`、`DATASET_STEREO_DIR`、`DATASET_CACHE_DIR` は自動作成します。 |
-| `prepare-dataset-test.sh` | `prepare-dataset.sh` の stereo 生成だけを `--limit 1`、`--max-segments 60`、`--max-response-chars 40` 付きで実行します。 | 1 件だけ短く処理して、TTS や stereo 生成の疎通確認に使います。JSONL 生成と Whisper annotation は実行しません。 |
-| `train-run.sh` | `UV_CACHE_DIR=.uv-cache`、`CONFIG_PATH` 未指定時は `TRAIN_CONFIG_PATH`、`RENDER_TRAIN_CONFIG` 未指定時は `CONFIG_PATH` 未指定なら `1`、指定ありなら `0`、`CUDA_VISIBLE_DEVICES=0`、`NPROC_PER_NODE=auto`、`MASTER_PORT=29501`、`NO_TORCH_COMPILE=1`、`HF_HOME=$PWD/models/huggingface` です。 | 学習前に `TRAIN_JSONL` を作り直し、transcript json が揃っているか確認します。`CONFIG_PATH` 未指定なら学習 config を生成します。`RUN_DIR` が既に存在する場合は削除せず `*.previous.YYYYMMDD-HHMMSS` に退避します。`NPROC_PER_NODE=auto` は `CUDA_VISIBLE_DEVICES` の GPU 数に展開されます。 |
-| `start.sh` | `UV_CACHE_DIR=.uv-cache`、`SKIP_EXPORT_LATEST=0`、`LORA_WEIGHT=${LORA_LATEST_DIR}/lora.safetensors`、`MOSHI_CONFIG_PATH` 未指定時は `CONFIG_PATH`、それも未指定なら `${LORA_LATEST_DIR}/config.json`、`CUDA_VISIBLE_DEVICES=0`、`HF_HOME=$PWD/models/huggingface`、`NO_TORCH_COMPILE=1` です。 | 既定では起動前に `RUN_DIR` から latest LoRA を書き出します。書き出しを飛ばす場合は `SKIP_EXPORT_LATEST=1` を使います。LoRA weight または config が見つからない場合は停止します。最後の引数はそのまま `python -m moshi.server` に渡します。 |
-| `docker/build-lora-image.sh` | `IMAGE_REF=moshi-lora-${LORA_NAME}:local`、`LORA_DIR=${LORA_LATEST_DIR}`、`HF_HOME=models/huggingface`、`MOSHI_COMMIT=061cc4c630d9e11722e08b7d02b1836ba58f30e8`、`PYTORCH_IMAGE=pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime` です。 | latest LoRA と config を Docker build context にコピーして image を作ります。`--include-hf-cache` を付けた場合だけ Hugging Face cache も同梱します。 |
+| script | 主な挙動 |
+| ------ | -------- |
+| `prepare-dataset.sh` | raw 音声から stereo wav を作り、`TRAIN_JSONL` を生成し、Moshi 用 transcript json を作ります。必要な dataset ディレクトリは自動作成します。 |
+| `prepare-dataset-test.sh` | 1 件だけ短く処理して、TTS や stereo 生成の疎通確認に使います。JSONL 生成と Whisper annotation は実行しません。 |
+| `train-run.sh` | 学習前に `TRAIN_JSONL` を作り直し、transcript json が揃っているか確認します。`CONFIG_PATH` 未指定なら学習 config を生成します。 |
+| `start.sh` | 起動前に latest LoRA を書き出します。`SKIP_EXPORT_LATEST=1` なら省略します。最後の引数はそのまま `python -m moshi.server` に渡します。 |
+| `docker/build-lora-image.sh` | latest LoRA と config を Docker build context にコピーして image を作ります。`--include-hf-cache` で HF cache も同梱します。 |
 
 `loadLoraEnv.sh` を使わない shell script:
 
-| script | 追加デフォルト | 主な挙動 |
-| ------ | -------------- | -------- |
-| `scripts/bootstrapMoshiEnv.sh` | `UV_LINK_MODE=copy` です。 | `moshi-finetune/.venv/bin/python` が無ければ `uv venv --project moshi-finetune` を実行し、その後 `uv sync --project moshi-finetune` を実行します。 |
-| `docker/run-lora-image.sh` | `IMAGE_REF=moshi-lora:local`、`PORT=8998`、`GPUS=all`、`HF_HOME_MOUNT` 未指定、`USE_SUDO_DOCKER=0` です。 | Docker image を `docker run --rm -it --gpus` 付きで起動します。`--hf-home` を指定した場合だけホストの Hugging Face cache を読み取り専用で mount します。 |
-| `docker/start-lora-server.sh` | `LORA_WEIGHT=/opt/moshi/lora/lora.safetensors`、`MOSHI_CONFIG_PATH` 未指定時は `CONFIG_PATH`、それも未指定なら `/opt/moshi/lora/config.json`、`HF_REPO=llm-jp/llm-jp-moshi-v1`、`HOST=0.0.0.0`、`PORT=8998`、`HF_HOME=/opt/moshi/models/huggingface`、`NO_TORCH_COMPILE=1` です。 | コンテナ内で `python -m moshi.server` を起動します。LoRA weight または config が見つからない場合は停止します。 |
+| script | 主な挙動 |
+| ------ | -------- |
+| `scripts/bootstrapMoshiEnv.sh` | venv が無ければ作成し、その後 `uv sync --project moshi-finetune` を実行します。 |
+| `docker/run-lora-image.sh` | Docker image を `docker run --rm -it --gpus` 付きで起動します。`--hf-home` 指定時だけ HF cache を mount します。 |
+| `docker/start-lora-server.sh` | コンテナ内で `python -m moshi.server` を起動します。LoRA weight または config が見つからない場合は停止します。 |
 
 Docker 用の詳しい使い方は [docker/README.md](docker/README.md) も参照してください。
 

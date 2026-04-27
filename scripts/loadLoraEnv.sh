@@ -23,7 +23,7 @@ if [ -f "$env_file" ]; then
   fi
 fi
 
-: "${LORA_NAME:=shigureui1}"
+: "${LORA_NAME:=moshi-lora}"
 
 if [[ ! "$LORA_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "LORA_NAME may only contain letters, numbers, dot, underscore, and hyphen: $LORA_NAME" >&2
