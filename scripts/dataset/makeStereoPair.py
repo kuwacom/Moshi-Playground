@@ -7,7 +7,7 @@ import torch
 import torchaudio
 import torchaudio.functional as audio_functional
 
-from progressUtils import console, status
+from scripts.common.progressUtils import console, status
 
 
 def parse_args() -> argparse.Namespace:

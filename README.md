@@ -30,20 +30,20 @@
 
 ```bash
 # 1. 環境構築
-bash scripts/bootstrapMoshiEnv.sh
+bash scripts/env/bootstrapMoshiEnv.sh
 
 # 2. モデル取得
 HF_HOME="$PWD/models/huggingface" \
-uv run --project moshi-finetune python scripts/downloadModel.py
+uv run --project moshi-finetune python -m scripts.model.downloadModel
 
 # 3. .env 作成
 cp .env.example .env
 
 # 4. raw 音声を確認
-uv run --project moshi-finetune python scripts/processRawToStereo.py --dry-run
+uv run --project moshi-finetune python -m scripts.dataset.processRawToStereo --dry-run
 
 # 5. 少量だけ試作
-uv run --project moshi-finetune python scripts/processRawToStereo.py \
+uv run --project moshi-finetune python -m scripts.dataset.processRawToStereo \
   --limit 1 \
   --max-segments 10
 
@@ -90,6 +90,8 @@ loras/${LORA_NAME}/latest/
 
 補助ツールは `rich` で、処理中ファイル、完了数、経過時間、残り時間の目安を表示します。長い処理では、必ず `--dry-run` や `--limit` で小さく試してから本番処理してください。
 
+`scripts/` の整理方針は [scripts/README.md](scripts/README.md) を参照してください。今後コラボ配信向けの前処理は `scripts/collab/` に追加していく前提です。
+
 ---
 
 ## 1. 環境構築
@@ -110,7 +112,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 依存関係を同期:
 
 ```bash
-bash scripts/bootstrapMoshiEnv.sh
+bash scripts/env/bootstrapMoshiEnv.sh
 ```
 
 補足:
@@ -122,11 +124,11 @@ bash scripts/bootstrapMoshiEnv.sh
 
 ## 2. モデル取得
 
-モデル本体は Hugging Face Hub キャッシュとして `models/huggingface/hub/` に置きます。`scripts/downloadModel.py` は通常、別のフルコピーを作らず、このキャッシュだけを使います。
+モデル本体は Hugging Face Hub キャッシュとして `models/huggingface/hub/` に置きます。`scripts/model/downloadModel.py` は通常、別のフルコピーを作らず、このキャッシュだけを使います。
 
 ```bash
 HF_HOME="$PWD/models/huggingface" \
-uv run --project moshi-finetune python scripts/downloadModel.py
+uv run --project moshi-finetune python -m scripts.model.downloadModel
 ```
 
 学習設定の雛形は `config/llmJpMoshiLora.example.yaml` です。`train-run.sh` が `.env` の `LORA_NAME` から `config/${LORA_NAME}.yaml` を生成し、`hf_repo_id` に `llm-jp/llm-jp-moshi-v1` を指定します。
@@ -254,7 +256,7 @@ PY
 
 ### shell script での使われ方
 
-`prepare-dataset.sh`、`prepare-dataset-test.sh`、`train-run.sh`、`start.sh`、`docker/build-lora-image.sh` は共通で `scripts/loadLoraEnv.sh` を `source` します。  
+`prepare-dataset.sh`、`prepare-dataset-test.sh`、`train-run.sh`、`start.sh`、`docker/build-lora-image.sh` は共通で `scripts/env/loadLoraEnv.sh` を `source` します。
 ここで `.env` を読み込み、未指定のパスを `LORA_NAME` から補完します。`ENV_FILE` を指定すると、読み込む `.env` を変更できます。
 
 注意点として、各 script は起動後に `.env` を `source` します。そのため同名の変数が `.env` に書かれている場合、`CUDA_VISIBLE_DEVICES=0,1 bash train-run.sh` のようにコマンド先頭で指定した値よりも `.env` 側の値が優先されます。一時的に設定を変えたい場合は、`.env` を編集するか、別ファイルを `ENV_FILE=path/to/.env bash train-run.sh` のように指定してください。
@@ -288,7 +290,7 @@ TRAIN_CONFIG_PATH=config/moshi-lora.yaml
 
 | script                         | 主な挙動                                                                                                         |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `scripts/bootstrapMoshiEnv.sh` | venv が無ければ作成し、その後 `uv sync --project moshi-finetune` を実行します。                                  |
+| `scripts/env/bootstrapMoshiEnv.sh` | venv が無ければ作成し、その後 `uv sync --project moshi-finetune` を実行します。                                  |
 | `docker/run-lora-image.sh`     | Docker image を `docker run --rm -it --gpus` 付きで起動します。`--hf-home` 指定時だけ HF cache を mount します。 |
 | `docker/start-lora-server.sh`  | コンテナ内で `python -m moshi.server` を起動します。LoRA weight または config が見つからない場合は停止します。   |
 
@@ -380,7 +382,7 @@ datasets/raw/${LORA_NAME}/source003.wav
 ### 2. 対象ファイルを確認する
 
 ```bash
-uv run --project moshi-finetune python scripts/processRawToStereo.py --dry-run
+uv run --project moshi-finetune python -m scripts.dataset.processRawToStereo --dry-run
 ```
 
 `--dry-run` は変換せず、処理対象になるファイルだけを表示します。意図しないファイルが混ざっていないか、ここで確認してください。
@@ -388,7 +390,7 @@ uv run --project moshi-finetune python scripts/processRawToStereo.py --dry-run
 ### 3. 少量だけ試作する
 
 ```bash
-uv run --project moshi-finetune python scripts/processRawToStereo.py \
+uv run --project moshi-finetune python -m scripts.dataset.processRawToStereo \
   --limit 1 \
   --max-segments 10 \
   --max-response-chars 40 \
@@ -419,9 +421,9 @@ bash prepare-dataset.sh
 
 | 処理                     | 内容                                                                      |
 | ------------------------ | ------------------------------------------------------------------------- |
-| `processRawToStereo.py`  | raw音声をstereo学習音声へ変換                                             |
-| `prepareDatasetJsonl.py` | `datasets/stereo/${LORA_NAME}/` から `datasets/${LORA_NAME}.jsonl` を生成 |
-| `annotateDataset.py`     | Whisper large-v3 で学習用 transcript json を生成                          |
+| `scripts/dataset/processRawToStereo.py`  | raw音声をstereo学習音声へ変換                                             |
+| `scripts/dataset/prepareDatasetJsonl.py` | `datasets/stereo/${LORA_NAME}/` から `datasets/${LORA_NAME}.jsonl` を生成 |
+| `scripts/dataset/annotateDataset.py`     | Whisper large-v3 で学習用 transcript json を生成                          |
 
 ここまで終わると、学習前の準備として必要な `stereo wav`、`jsonl`、`transcript json` が揃います。次はそのまま `bash train-run.sh` で学習に進めます。
 
@@ -446,18 +448,18 @@ bash train-run.sh
 失敗したファイルを飛ばして続けたい場合:
 
 ```bash
-uv run --project moshi-finetune python scripts/processRawToStereo.py \
+uv run --project moshi-finetune python -m scripts.dataset.processRawToStereo \
   --continue-on-error
 ```
 
 ### 7. JSONL と transcript を個別に作る
 
 ```bash
-uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+uv run --project moshi-finetune python -m scripts.dataset.prepareDatasetJsonl \
   --audio-dir "$DATASET_STEREO_DIR" \
   --output "$TRAIN_JSONL"
 
-uv run --project moshi-finetune python scripts/annotateDataset.py \
+uv run --project moshi-finetune python -m scripts.dataset.annotateDataset \
   "$TRAIN_JSONL" \
   --lang ja \
   --whisper-model large-v3 \
@@ -467,7 +469,7 @@ uv run --project moshi-finetune python scripts/annotateDataset.py \
 最後に、wav と transcript json が揃っているか確認します。
 
 ```bash
-uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+uv run --project moshi-finetune python -m scripts.dataset.prepareDatasetJsonl \
   --audio-dir "$DATASET_STEREO_DIR" \
   --output "$TRAIN_JSONL" \
   --require-transcript
@@ -580,14 +582,14 @@ rightRatio = 右ch発話秒数 / (左ch発話秒数 + 右ch発話秒数)
 
 | ツール                               | 使う場面                                                                      |
 | ------------------------------------ | ----------------------------------------------------------------------------- |
-| `processRawToStereo.py`              | raw フォルダを一括で stereo 化したい                                          |
-| `generateSoloConversationDataset.py` | 1本だけ一人配信を stereo 化して細かく確認したい                               |
-| `trimSilence.py`                     | 長い無音だけを削りたい                                                        |
-| `extractVocalsDemucs.py`             | サーバ上で簡易的に声を抽出したい                                              |
-| `synthesizeTts.py`                   | TTS API だけ単体で試したい                                                    |
-| `makeStereoPair.py`                  | 既にある左右音声を stereo wav にしたい                                        |
-| `prepareDatasetJsonl.py`             | `datasets/stereo/${LORA_NAME}/` から `datasets/${LORA_NAME}.jsonl` を作りたい |
-| `annotateDataset.py`                 | ローカル Whisper で学習用 transcript を作りたい                               |
+| `scripts/dataset/processRawToStereo.py`              | raw フォルダを一括で stereo 化したい                                          |
+| `scripts/dataset/generateSoloConversationDataset.py` | 1本だけ一人配信を stereo 化して細かく確認したい                               |
+| `scripts/dataset/trimSilence.py`                     | 長い無音だけを削りたい                                                        |
+| `scripts/dataset/extractVocalsDemucs.py`             | サーバ上で簡易的に声を抽出したい                                              |
+| `scripts/dataset/synthesizeTts.py`                   | TTS API だけ単体で試したい                                                    |
+| `scripts/dataset/makeStereoPair.py`                  | 既にある左右音声を stereo wav にしたい                                        |
+| `scripts/dataset/prepareDatasetJsonl.py`             | `datasets/stereo/${LORA_NAME}/` から `datasets/${LORA_NAME}.jsonl` を作りたい |
+| `scripts/dataset/annotateDataset.py`                 | ローカル Whisper で学習用 transcript を作りたい                               |
 
 ### 手動で1本ずつ作る
 
@@ -612,7 +614,7 @@ datasets/raw/${LORA_NAME}/source001.wav
 #### 2. 必要なら無音を詰める
 
 ```bash
-uv run --project moshi-finetune python scripts/trimSilence.py \
+uv run --project moshi-finetune python -m scripts.dataset.trimSilence \
   --input datasets/raw/${LORA_NAME}/source001.wav \
   --output datasets/raw/${LORA_NAME}/trimmed/source001.wav \
   --threshold-db -45 \
@@ -628,7 +630,7 @@ uv run --project moshi-finetune python scripts/trimSilence.py \
 左chに元音声、右chに LLM + TTS で作った応答を入れる場合は、単体変換スクリプトを使います。
 
 ```bash
-uv run --project moshi-finetune python scripts/generateSoloConversationDataset.py \
+uv run --project moshi-finetune python -m scripts.dataset.generateSoloConversationDataset \
   --input datasets/raw/${LORA_NAME}/trimmed/source001.wav \
   --output datasets/stereo/${LORA_NAME}/source001.wav \
   --metadata-output datasets/stereo/${LORA_NAME}/source001.responses.json \
@@ -653,33 +655,33 @@ uv run --project moshi-finetune python scripts/generateSoloConversationDataset.p
 TTS API の音色や速度を先に確認したい場合:
 
 ```bash
-uv run --project moshi-finetune python scripts/synthesizeTts.py \
+uv run --project moshi-finetune python -m scripts.dataset.synthesizeTts \
   "そうなんですね、もう少し聞かせてください" \
   --type 10 \
   --output datasets/tts/${LORA_NAME}/check001.wav
 ```
 
-この単体スクリプトは速度変更をしません。学習用の一人配信補完では `generateSoloConversationDataset.py` と `processRawToStereo.py` の `--tts-speed` で、ピッチを変えずに速度調整します。
+この単体スクリプトは速度変更をしません。学習用の一人配信補完では `scripts/dataset/generateSoloConversationDataset.py` と `scripts/dataset/processRawToStereo.py` の `--tts-speed` で、ピッチを変えずに速度調整します。
 
 #### 5. 左右の音声が既にある場合は手動で stereo 化する
 
 コラボ、通話、手作業で作った応答音声など、左chと右chを別ファイルで用意できている場合は、LLM/TTS 補完を使わずに合成できます。
 
 ```bash
-uv run --project moshi-finetune python scripts/makeStereoPair.py \
+uv run --project moshi-finetune python -m scripts.dataset.makeStereoPair \
   --left datasets/raw/${LORA_NAME}/leftSpeaker.wav \
   --right datasets/raw/${LORA_NAME}/rightSpeaker.wav \
   --output datasets/stereo/${LORA_NAME}/manual001.wav
 ```
 
-`makeStereoPair.py` は左右を 24kHz にそろえ、短い方を無音で埋めて同じ長さにします。左右の開始タイミングがずれている場合は、事前に DAW や音声編集ソフトで合わせてから使ってください。
+`scripts/dataset/makeStereoPair.py` は左右を 24kHz にそろえ、短い方を無音で埋めて同じ長さにします。左右の開始タイミングがずれている場合は、事前に DAW や音声編集ソフトで合わせてから使ってください。
 
 #### 6. 良いものだけ JSONL に入れる
 
 単体確認で問題ない wav だけを `datasets/stereo/${LORA_NAME}/` に残してから、JSONL を作ります。
 
 ```bash
-uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+uv run --project moshi-finetune python -m scripts.dataset.prepareDatasetJsonl \
   --audio-dir datasets/stereo/${LORA_NAME} \
   --output datasets/${LORA_NAME}.jsonl
 ```
@@ -687,7 +689,7 @@ uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
 学習用 transcript まで作ったあとに欠けがないか確認する場合:
 
 ```bash
-uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+uv run --project moshi-finetune python -m scripts.dataset.prepareDatasetJsonl \
   --audio-dir datasets/stereo/${LORA_NAME} \
   --output datasets/${LORA_NAME}.jsonl \
   --require-transcript
@@ -698,7 +700,7 @@ uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
 長い無音だけを削り、短い自然な間は残します。
 
 ```bash
-uv run --project moshi-finetune python scripts/trimSilence.py \
+uv run --project moshi-finetune python -m scripts.dataset.trimSilence \
   --input datasets/raw/${LORA_NAME}/source001.wav \
   --output datasets/raw/${LORA_NAME}/trimmed/source001.wav
 ```
@@ -706,7 +708,7 @@ uv run --project moshi-finetune python scripts/trimSilence.py \
 フォルダ一括:
 
 ```bash
-uv run --project moshi-finetune python scripts/trimSilence.py \
+uv run --project moshi-finetune python -m scripts.dataset.trimSilence \
   --input datasets/raw/${LORA_NAME}/demucsVocals \
   --output datasets/raw/${LORA_NAME}/trimmed \
   --recursive
@@ -724,7 +726,7 @@ uv run --project moshi-finetune python scripts/trimSilence.py \
 基本は UVR5 推奨ですが、サーバ上で簡易的にボーカル抽出したい場合は Demucs も使えます。追加依存が重いので、必要な時だけ `--with demucs` で実行します。
 
 ```bash
-uv run --project moshi-finetune --with demucs python scripts/extractVocalsDemucs.py \
+uv run --project moshi-finetune --with demucs python -m scripts.dataset.extractVocalsDemucs \
   --input datasets/raw/${LORA_NAME}/source001.wav \
   --output-dir datasets/raw/${LORA_NAME}/demucsVocals
 ```
@@ -732,7 +734,7 @@ uv run --project moshi-finetune --with demucs python scripts/extractVocalsDemucs
 フォルダ一括:
 
 ```bash
-uv run --project moshi-finetune --with demucs python scripts/extractVocalsDemucs.py \
+uv run --project moshi-finetune --with demucs python -m scripts.dataset.extractVocalsDemucs \
   --input datasets/raw/${LORA_NAME}/originals \
   --output-dir datasets/raw/${LORA_NAME}/demucsVocals
 ```
@@ -740,7 +742,7 @@ uv run --project moshi-finetune --with demucs python scripts/extractVocalsDemucs
 GPU メモリ不足時:
 
 ```bash
-uv run --project moshi-finetune --with demucs python scripts/extractVocalsDemucs.py \
+uv run --project moshi-finetune --with demucs python -m scripts.dataset.extractVocalsDemucs \
   --input datasets/raw/${LORA_NAME}/source001.wav \
   --output-dir datasets/raw/${LORA_NAME}/demucsVocals \
   --segment 7.8
@@ -762,7 +764,7 @@ Demucs は `--two-stems vocals` でボーカルと伴奏を分けますが、話
 一個前の章の最後の方でもやったやつです
 
 ```bash
-uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+uv run --project moshi-finetune python -m scripts.dataset.prepareDatasetJsonl \
   --audio-dir datasets/stereo/${LORA_NAME} \
   --output datasets/${LORA_NAME}.jsonl
 ```
@@ -778,17 +780,17 @@ uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
 学習用 transcript を生成します。Whisper はローカル実行で、基本は `large-v3` を使います。
 
 ```bash
-uv run --project moshi-finetune python scripts/annotateDataset.py \
+uv run --project moshi-finetune python -m scripts.dataset.annotateDataset \
   datasets/${LORA_NAME}.jsonl \
   --lang ja \
   --whisper-model large-v3 \
   --whisper-cache-dir models
 ```
 
-既に近似生成した `datasets/stereo/${LORA_NAME}/*.json` がある場合、`annotateDataset.py` は既存ファイルをスキップします。Whisper で作り直す場合は `--overwrite-existing` を付けます。
+既に近似生成した `datasets/stereo/${LORA_NAME}/*.json` がある場合、`scripts/dataset/annotateDataset.py` は既存ファイルをスキップします。Whisper で作り直す場合は `--overwrite-existing` を付けます。
 
 ```bash
-uv run --project moshi-finetune python scripts/annotateDataset.py \
+uv run --project moshi-finetune python -m scripts.dataset.annotateDataset \
   datasets/${LORA_NAME}.jsonl \
   --lang ja \
   --whisper-model large-v3 \
@@ -796,19 +798,19 @@ uv run --project moshi-finetune python scripts/annotateDataset.py \
   --overwrite-existing
 ```
 
-すでに `processRawToStereo.py` で作った `datasets/stereo/${LORA_NAME}/*.responses.json` があり、Whisper を再実行せずにまず学習を通したい場合は、近似 transcript を作れます。
+すでに `scripts/dataset/processRawToStereo.py` で作った `datasets/stereo/${LORA_NAME}/*.responses.json` があり、Whisper を再実行せずにまず学習を通したい場合は、近似 transcript を作れます。
 
 ```bash
-uv run --project moshi-finetune python scripts/createAnnotationJsonFromResponses.py \
+uv run --project moshi-finetune python -m scripts.dataset.createAnnotationJsonFromResponses \
   datasets/${LORA_NAME}.jsonl
 ```
 
-これは `*.responses.json` 内のセグメント時刻から `datasets/stereo/${LORA_NAME}/*.json` を作る高速な方法です。ただし word timestamp ではなく近似なので、品質優先では `annotateDataset.py` を使ってください。
+これは `*.responses.json` 内のセグメント時刻から `datasets/stereo/${LORA_NAME}/*.json` を作る高速な方法です。ただし word timestamp ではなく近似なので、品質優先では `scripts/dataset/annotateDataset.py` を使ってください。
 
 wav と json が揃っているか確認:
 
 ```bash
-uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+uv run --project moshi-finetune python -m scripts.dataset.prepareDatasetJsonl \
   --audio-dir datasets/stereo/${LORA_NAME} \
   --output datasets/${LORA_NAME}.jsonl \
   --require-transcript
@@ -824,7 +826,7 @@ uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
 config/llmJpMoshiLora.example.yaml
 ```
 
-実際に学習で使う `config/${LORA_NAME}.yaml` は、`train-run.sh` の中で `scripts/renderTrainConfig.py` によって自動生成されます。
+実際に学習で使う `config/${LORA_NAME}.yaml` は、`train-run.sh` の中で `scripts/train/renderTrainConfig.py` によって自動生成されます。
 
 `renderTrainConfig.py` は雛形を読み、少なくとも以下の値を今の `.env` に合わせて差し替えます。
 
@@ -879,7 +881,7 @@ NPROC_PER_NODE=4
 
 ```bash
 UV_CACHE_DIR=.uv-cache \
-uv run --project moshi-finetune python scripts/renderTrainConfig.py \
+uv run --project moshi-finetune python -m scripts.train.renderTrainConfig \
   --template config/llmJpMoshiLora.example.yaml \
   --output "$TRAIN_CONFIG_PATH" \
   --train-data "$TRAIN_JSONL" \
@@ -908,7 +910,7 @@ loras/${LORA_NAME}/checkpoints/checkpoint_XXXXXX/consolidated/
 最新 LoRA を固定パスにコピー:
 
 ```bash
-uv run --project moshi-finetune python scripts/exportLatestLora.py
+uv run --project moshi-finetune python -m scripts.train.exportLatestLora
 ```
 
 出力:
@@ -998,7 +1000,7 @@ uv run --project moshi-finetune python -m moshi.server \
 
 ### TTS API が 403 を返す
 
-- `scripts/synthesizeTts.py` と `scripts/generateSoloConversationDataset.py` は `User-Agent` と `Accept` ヘッダを付けるように対応済みです
+- `scripts/dataset/synthesizeTts.py` と `scripts/dataset/generateSoloConversationDataset.py` は `User-Agent` と `Accept` ヘッダを付けるように対応済みです
 - 古い状態で失敗した場合は最新のスクリプトで再実行してください
 - API の返却音声は拡張子が `.wav` でも内部形式が圧縮音声として判定されることがありますが、`torchaudio` で読める場合は後続処理で使えます
 

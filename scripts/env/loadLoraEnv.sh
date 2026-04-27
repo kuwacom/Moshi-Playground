@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 各bashからsourceしてLoRAごとの作業パスを揃える
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 env_file="${ENV_FILE:-$repo_root/.env}"
 
 if [ -f "$env_file" ]; then

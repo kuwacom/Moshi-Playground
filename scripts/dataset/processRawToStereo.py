@@ -6,8 +6,8 @@ from pathlib import Path
 
 import torchaudio
 
-from datasetPaths import datasetCacheDir, datasetRawDir, datasetStereoDir
-from generateSoloConversationDataset import (
+from scripts.common.datasetPaths import datasetCacheDir, datasetRawDir, datasetStereoDir
+from scripts.dataset.generateSoloConversationDataset import (
     GeneratedResponse,
     add_balance_fill_responses,
     add_semantic_gap_insertions,
@@ -41,7 +41,7 @@ from generateSoloConversationDataset import (
     transcribe_audio_with_model,
     tts_paths_for_text,
 )
-from progressUtils import console, create_progress, status
+from scripts.common.progressUtils import console, create_progress, status
 
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"}

@@ -6,8 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from datasetPaths import datasetRawDir
-from progressUtils import console, create_progress, status
+from scripts.common.datasetPaths import datasetRawDir
+from scripts.common.progressUtils import console, create_progress, status
 
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"}
@@ -106,7 +106,7 @@ def main() -> None:
         raise RuntimeError(
             "Demucs is not installed. Run with: "
             "uv run --project moshi-finetune --with demucs python "
-            "scripts/extractVocalsDemucs.py ..."
+            "scripts/dataset/extractVocalsDemucs.py ..."
         ) from error
     except subprocess.CalledProcessError as error:
         raise RuntimeError(f"Demucs failed with exit code {error.returncode}") from error

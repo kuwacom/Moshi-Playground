@@ -7,8 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from datasetPaths import trainJsonlPath
-from progressUtils import console, status
+from scripts.common.datasetPaths import trainJsonlPath
+from scripts.common.progressUtils import console, status
 
 
 def parse_args() -> argparse.Namespace:

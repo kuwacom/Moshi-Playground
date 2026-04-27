@@ -7,8 +7,8 @@ from pathlib import Path
 
 import sphn
 
-from datasetPaths import datasetStereoDir, trainJsonlPath
-from progressUtils import console, create_progress, status
+from scripts.common.datasetPaths import datasetStereoDir, trainJsonlPath
+from scripts.common.progressUtils import console, create_progress, status
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,7 +44,7 @@ def main() -> None:
                 "Missing transcript json files:\n"
                 f"{missing_list}\n\n"
                 "Create them with:\n"
-                "uv run --project moshi-finetune python scripts/annotateDataset.py "
+                "uv run --project moshi-finetune python -m scripts.dataset.annotateDataset "
                 f"{args.output} --lang ja --whisper-model large-v3 "
                 "--whisper-cache-dir models"
             )

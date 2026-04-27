@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # README と同じ .env 解決を使い、LoRA ごとの既定パスを揃える
 # shellcheck source=/dev/null
-source "$repo_root/scripts/loadLoraEnv.sh"
+source "$repo_root/scripts/env/loadLoraEnv.sh"
 
 usage() {
   cat <<'EOF'

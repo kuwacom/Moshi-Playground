@@ -22,8 +22,8 @@ import whisper_timestamped as whisper
 from openai import OpenAI
 from openai import APIStatusError, OpenAIError
 
-from datasetPaths import datasetCacheDir
-from progressUtils import console, create_progress, status
+from scripts.common.datasetPaths import datasetCacheDir
+from scripts.common.progressUtils import console, create_progress, status
 
 
 DEFAULT_OPENAI_MODEL = "anthropic/claude-sonnet-4.6"

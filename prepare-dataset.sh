@@ -2,7 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-source scripts/loadLoraEnv.sh
+source scripts/env/loadLoraEnv.sh
 
 mkdir -p "$DATASET_RAW_DIR" "$DATASET_STEREO_DIR" "$DATASET_CACHE_DIR"
 
@@ -14,7 +14,7 @@ echo "  cache_dir:       $DATASET_CACHE_DIR"
 echo "  train_jsonl:     $TRAIN_JSONL"
 
 # raw音声を順番に処理してMoshi学習用のstereo音声を作る
-uv run --project moshi-finetune python scripts/processRawToStereo.py \
+uv run --project moshi-finetune python -m scripts.dataset.processRawToStereo \
   --input-dir "$DATASET_RAW_DIR" \
   --output-dir "$DATASET_STEREO_DIR" \
   --cache-dir "$DATASET_CACHE_DIR" \
@@ -23,12 +23,12 @@ uv run --project moshi-finetune python scripts/processRawToStereo.py \
   --tts-speed 1.05
 
 # stereo音声一覧から学習用JSONLを作る
-uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+uv run --project moshi-finetune python -m scripts.dataset.prepareDatasetJsonl \
   --audio-dir "$DATASET_STEREO_DIR" \
   --output "$TRAIN_JSONL"
 
 # Moshiが読む単語タイムスタンプ付きアノテーションJSONを作る
-uv run --project moshi-finetune python scripts/annotateDataset.py \
+uv run --project moshi-finetune python -m scripts.dataset.annotateDataset \
   "$TRAIN_JSONL" \
   --lang ja \
   --whisper-model large-v3 \

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
-from progressUtils import console, status
+from scripts.common.progressUtils import console, status
 
 
 def parse_args() -> argparse.Namespace:

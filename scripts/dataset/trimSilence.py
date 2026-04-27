@@ -8,7 +8,7 @@ import torch
 import torchaudio
 import torchaudio.functional as audio_functional
 
-from progressUtils import console, create_progress
+from scripts.common.progressUtils import console, create_progress
 
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"}

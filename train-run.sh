@@ -2,11 +2,11 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-source scripts/loadLoraEnv.sh
+source scripts/env/loadLoraEnv.sh
 
 # 学習前にJSONLを作り直し、対応するtranscript jsonが揃っているか確認する
 UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}" \
-uv run --project moshi-finetune python scripts/prepareDatasetJsonl.py \
+uv run --project moshi-finetune python -m scripts.dataset.prepareDatasetJsonl \
   --audio-dir "$DATASET_STEREO_DIR" \
   --output "$TRAIN_JSONL" \
   --require-transcript
@@ -21,7 +21,7 @@ fi
 
 if [ "$should_render_config" = "1" ]; then
   UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}" \
-  uv run --project moshi-finetune python scripts/renderTrainConfig.py \
+  uv run --project moshi-finetune python -m scripts.train.renderTrainConfig \
     --template "$TRAIN_CONFIG_TEMPLATE_PATH" \
     --output "$config_path" \
     --train-data "$TRAIN_JSONL" \

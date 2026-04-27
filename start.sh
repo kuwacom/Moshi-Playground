@@ -2,7 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-source scripts/loadLoraEnv.sh
+source scripts/env/loadLoraEnv.sh
 
 run_dir="$RUN_DIR"
 latest_dir="$LORA_LATEST_DIR"
@@ -10,7 +10,7 @@ hf_repo="$HF_REPO"
 
 if [ "${SKIP_EXPORT_LATEST:-0}" != "1" ]; then
   UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}" \
-    uv run --project moshi-finetune python scripts/exportLatestLora.py \
+    uv run --project moshi-finetune python -m scripts.train.exportLatestLora \
       --run-dir "$run_dir" \
       --output-dir "$latest_dir"
 fi

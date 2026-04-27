@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from datasetPaths import trainJsonlPath
-from progressUtils import console, create_progress
+from scripts.common.datasetPaths import trainJsonlPath
+from scripts.common.progressUtils import console, create_progress
 
 
 def parse_args() -> argparse.Namespace:

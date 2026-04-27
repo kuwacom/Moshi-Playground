@@ -7,8 +7,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from datasetPaths import datasetTtsDir
-from progressUtils import console, status
+from scripts.common.datasetPaths import datasetTtsDir
+from scripts.common.progressUtils import console, status
 
 
 DEFAULT_TTS_TYPE = "10"

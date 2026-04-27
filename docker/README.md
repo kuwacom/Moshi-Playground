@@ -50,7 +50,7 @@ bash docker/build-lora-image.sh \
 
 ```bash
 HF_HOME="$PWD/models/huggingface" \
-uv run --project moshi-finetune python scripts/downloadModel.py
+uv run --project moshi-finetune python -m scripts.model.downloadModel
 ```
 
 ## 3. ローカルで起動確認する
