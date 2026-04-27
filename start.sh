@@ -35,7 +35,7 @@ echo "  lora:   $lora_weight"
 echo "  config: $config_path"
 echo "  url:    http://localhost:8998"
 
-CUDA_VISIBLE_DEVICES="${CUDA_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}" \
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
 HF_HOME="${HF_HOME:-$PWD/models/huggingface}" \
 NO_TORCH_COMPILE="${NO_TORCH_COMPILE:-1}" \
 UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}" \

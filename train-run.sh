@@ -17,14 +17,14 @@ if [ -e "$run_dir" ]; then
   mv "$run_dir" "$archived_run_dir"
 fi
 
-gpu_ids="${CUDA_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}"
+gpu_ids="${CUDA_VISIBLE_DEVICES:-0}"
 IFS=',' read -ra gpu_id_list <<< "$gpu_ids"
 nproc_per_node="${NPROC_PER_NODE:-${#gpu_id_list[@]}}"
 master_port="${MASTER_PORT:-29501}"
 config_path="${CONFIG_PATH:-config/llmJpMoshiLora.yaml}"
 
 echo "Training configuration"
-echo "  CUDA_DEVICES:          $gpu_ids"
+echo "  CUDA_VISIBLE_DEVICES:  $gpu_ids"
 echo "  nproc_per_node:       $nproc_per_node"
 echo "  master_port:          $master_port"
 echo "  run_dir:              $run_dir"

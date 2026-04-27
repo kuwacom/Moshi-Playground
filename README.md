@@ -698,13 +698,13 @@ bash train-run.sh
 複数 GPU:
 
 ```bash
-CUDA_DEVICES=0,1,2,3 bash train-run.sh
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash train-run.sh
 ```
 
-`train-run.sh` は `CUDA_DEVICES` の数から `torchrun --nproc-per-node` を自動設定します。明示したい場合は `NPROC_PER_NODE` を指定します。内部では PyTorch 標準の `CUDA_VISIBLE_DEVICES` に変換して実行します。
+`train-run.sh` は `CUDA_VISIBLE_DEVICES` の数から `torchrun --nproc-per-node` を自動設定します。明示したい場合は `NPROC_PER_NODE` を指定します。
 
 ```bash
-CUDA_DEVICES=0,1,2,3 NPROC_PER_NODE=4 bash train-run.sh
+CUDA_VISIBLE_DEVICES=0,1,2,3 NPROC_PER_NODE=4 bash train-run.sh
 ```
 
 手動で実行する場合:
@@ -758,8 +758,8 @@ bash start.sh
 推論は `moshi.server` が1プロセス1GPUの構成です。モデルを複数GPUへ分割するのではなく、複数GPUで試したい場合はGPUごとに別ポートでサーバーを起動します。
 
 ```bash
-CUDA_DEVICES=0 bash start.sh --port 8998
-CUDA_DEVICES=1 bash start.sh --port 8999
+CUDA_VISIBLE_DEVICES=0 bash start.sh --port 8998
+CUDA_VISIBLE_DEVICES=1 bash start.sh --port 8999
 ```
 
 古いGPUで float16 推論にしたい場合:
