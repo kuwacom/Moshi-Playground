@@ -15,4 +15,6 @@ uv run --project moshi-finetune python scripts/processRawToStereo.py \
   --max-segments 60 \
   --max-response-chars 40 \
   --response-delay-sec 0.5 \
-  --tts-speed 1.05
+  --tts-speed 1.05 \
+  --semantic-gap-insert-mode auto \
+  --semantic-gap-max-count 2

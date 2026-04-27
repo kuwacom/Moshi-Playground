@@ -46,7 +46,7 @@ def main() -> None:
                 "Create them with:\n"
                 "uv run --project moshi-finetune python scripts/annotateDataset.py "
                 f"{args.output} --lang ja --whisper-model large-v3 "
-                "--whisper-cache-dir models/whisper"
+                "--whisper-cache-dir models"
             )
 
     with status(f"Reading durations for [bold]{len(paths)}[/bold] audio files"):

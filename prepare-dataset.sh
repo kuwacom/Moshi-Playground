@@ -32,5 +32,5 @@ uv run --project moshi-finetune python scripts/annotateDataset.py \
   "$TRAIN_JSONL" \
   --lang ja \
   --whisper-model large-v3 \
-  --whisper-cache-dir models/whisper \
+  --whisper-cache-dir models \
   --overwrite-existing
